@@ -1,0 +1,18 @@
+[project]
+name = "nhi-drug-price-history"
+version = "0.1.0"
+description = "台灣健保藥價歷史查詢：NHI 健保用藥品項檔的完整支付價歷史 ETL"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32",
+]
+
+[dependency-groups]
+dev = [
+    "openpyxl>=3.1.5",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

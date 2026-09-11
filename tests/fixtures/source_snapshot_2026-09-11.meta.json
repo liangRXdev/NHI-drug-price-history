@@ -1,0 +1,21 @@
+{
+  "snapshotDate": "2026-09-11",
+  "sourceFile": "nhi_raw_2026-09-11.csv",
+  "sourceSha256": "ae652960d9b7b139d514eafb57fcb4d13d45e4a631cc5e839f495ff53006340f",
+  "sourceBytes": 96434108,
+  "sourceRowCount": 224811,
+  "codes": [
+    "A017014321",
+    "A020296321",
+    "A035680329",
+    "AB47689100",
+    "AC48092100",
+    "AC48845100",
+    "AC48867100",
+    "B009254100",
+    "BC05037209",
+    "BC23981100",
+    "BC26467100"
+  ],
+  "pickedRowCount": 114
+}

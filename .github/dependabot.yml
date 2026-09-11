@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # workflow 內的 actions 皆 pin commit SHA，升級一律經 PR 審查
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly

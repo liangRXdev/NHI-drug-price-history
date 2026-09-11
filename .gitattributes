@@ -1,0 +1,7 @@
+# 固定 LF：build 以逐位元組比對判定資料是否變動，Windows checkout 若轉成 CRLF 會誤判為「有變動」
+* text=auto eol=lf
+
+# 凍結快照須逐位元組保留來源原貌（BOM、前綴空白、原換行）
+*.csv -text
+
+*.xlsx binary

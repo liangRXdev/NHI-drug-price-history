@@ -1,0 +1,67 @@
+name: Build Price History Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_anomaly:
+        description: '人工放行語意異常 guard（價格異常列或代號消失 > 1%）。僅在確認為健保署合法變更時勾選'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 18 * * 0'       # 每週日 UTC 18:00 = 台灣週一 02:00；官方月更，週檢查可及早發現端點／schema 故障
+
+permissions:
+  contents: write
+
+# 排程與手動觸發重疊時排隊依序執行、不取消：避免較舊的建置結果晚完成而覆蓋較新者
+concurrency:
+  group: build-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Actions 一律 pin commit SHA：本 job 具 contents:write，可直接改寫供臨床查詢的
+      # 支付價資料。mutable tag 遭上游投毒即可竄改資料；升級交由 Dependabot 開 PR。
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run unit tests
+        run: uv run pytest -q
+
+      # 任一 guard 失敗 → exit 1，data/ 與 status.json 皆不會被寫入，後續 commit 步驟不會執行。
+      # --allow-anomaly 只在手動觸發且勾選時傳入；腳本另會拒絕排程事件使用此參數。
+      - name: Build price history
+        env:
+          ANOMALY_FLAG: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_anomaly && '--allow-anomaly' || '' }}
+        run: uv run python build_price_history.py $ANOMALY_FLAG
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          # 只以大型資料檔判定是否有變動；status.json 每次成功檢查都會改變，
+          # 無變動時仍單獨 commit，讓前端能區分「官方沒更新」與「建置壞了」
+          if git diff --staged --quiet -- data/drug_index.json data/history; then
+            git reset -q
+            git add data/status.json
+            msg="chore(data): 例行檢查，資料無變動 $(TZ=Asia/Taipei date +%F)"
+          else
+            msg="chore(data): 更新健保藥價歷史資料 $(TZ=Asia/Taipei date +%F)"
+          fi
+          git commit -m "$msg"
+          # 被拒（non-fast-forward）即讓 workflow 失敗；禁止強制推送
+          git push
