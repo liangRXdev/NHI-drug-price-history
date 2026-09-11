@@ -1,0 +1,179 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 8,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "2016-08-01",
+      "to": "2017-03-31",
+      "rawPrice": "9.90",
+      "priceState": "priced"
+    },
+    {
+      "from": "2017-04-01",
+      "to": "2018-04-30",
+      "rawPrice": "8.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2018-05-01",
+      "to": "2019-03-31",
+      "rawPrice": "7.50",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-04-01",
+      "to": "2020-09-30",
+      "rawPrice": "6.70",
+      "priceState": "priced"
+    },
+    {
+      "from": "2020-10-01",
+      "to": "2021-12-31",
+      "rawPrice": "6.20",
+      "priceState": "priced"
+    },
+    {
+      "from": "2022-01-01",
+      "to": "2023-03-31",
+      "rawPrice": "5.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2023-04-01",
+      "to": "2024-03-31",
+      "rawPrice": "4.61",
+      "priceState": "priced"
+    },
+    {
+      "from": "2024-04-01",
+      "to": null,
+      "rawPrice": "4.12",
+      "priceState": "priced"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "9.90",
+      "absoluteChange": "-1.10",
+      "percentChange": "-11.11",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "8.80",
+      "absoluteChange": "-1.30",
+      "percentChange": "-14.77",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "7.50",
+      "absoluteChange": "-0.80",
+      "percentChange": "-10.67",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "6.70",
+      "absoluteChange": "-0.50",
+      "percentChange": "-7.46",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "6.20",
+      "absoluteChange": "-0.90",
+      "percentChange": "-14.52",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "5.30",
+      "absoluteChange": "-0.69",
+      "percentChange": "-13.02",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "4.61",
+      "absoluteChange": "-0.49",
+      "percentChange": "-10.63",
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "priced",
+      "current": {
+        "from": "2024-04-01",
+        "rawPrice": "4.12"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2024-04-01",
+        "previousPrice": "4.61"
+      },
+      "priceChangeCount": 7,
+      "pricedCount": 8,
+      "totalChange": {
+        "absoluteChange": "-5.78",
+        "percentChange": "-58.38"
+      }
+    },
+    "2026-10-01": {
+      "status": "priced",
+      "current": {
+        "from": "2024-04-01",
+        "rawPrice": "4.12"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2024-04-01",
+        "previousPrice": "4.61"
+      },
+      "priceChangeCount": 7,
+      "pricedCount": 8,
+      "totalChange": {
+        "absoluteChange": "-5.78",
+        "percentChange": "-58.38"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "撫緒膜衣錠20毫克",
+      "enName": "Caremod F.C. Tablets 20mg",
+      "ingredient": "PAROXETINE HYDROCHLORIDE 20 MG",
+      "manufacturer": "瑞士藥廠股份有限公司"
+    },
+    "2026-10-01": {
+      "chName": "撫緒膜衣錠20毫克",
+      "enName": "Caremod F.C. Tablets 20mg",
+      "ingredient": "PAROXETINE HYDROCHLORIDE 20 MG",
+      "manufacturer": "瑞士藥廠股份有限公司"
+    }
+  }
+}

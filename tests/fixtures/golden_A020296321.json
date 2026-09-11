@@ -1,0 +1,151 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 6,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "1995-03-01",
+      "to": "1998-02-28",
+      "rawPrice": "0.00",
+      "priceState": "terminated"
+    },
+    {
+      "from": "1998-03-01",
+      "to": "2006-10-31",
+      "rawPrice": "34.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2006-11-01",
+      "to": "2007-08-31",
+      "rawPrice": "25.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2007-09-01",
+      "to": "2011-11-30",
+      "rawPrice": "24.60",
+      "priceState": "priced"
+    },
+    {
+      "from": "2011-12-01",
+      "to": "2014-06-30",
+      "rawPrice": "20.60",
+      "priceState": "priced"
+    },
+    {
+      "from": "2014-07-01",
+      "to": null,
+      "rawPrice": "20.50",
+      "priceState": "priced"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "first_priced",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "34.00",
+      "absoluteChange": "-9.00",
+      "percentChange": "-26.47",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "25.00",
+      "absoluteChange": "-0.40",
+      "percentChange": "-1.60",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "24.60",
+      "absoluteChange": "-4.00",
+      "percentChange": "-16.26",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "20.60",
+      "absoluteChange": "-0.10",
+      "percentChange": "-0.49",
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "priced",
+      "current": {
+        "from": "2014-07-01",
+        "rawPrice": "20.50"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2014-07-01",
+        "previousPrice": "20.60"
+      },
+      "priceChangeCount": 4,
+      "pricedCount": 5,
+      "totalChange": {
+        "absoluteChange": "-13.50",
+        "percentChange": "-39.71"
+      }
+    },
+    "2026-10-01": {
+      "status": "priced",
+      "current": {
+        "from": "2014-07-01",
+        "rawPrice": "20.50"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2014-07-01",
+        "previousPrice": "20.60"
+      },
+      "priceChangeCount": 4,
+      "pricedCount": 5,
+      "totalChange": {
+        "absoluteChange": "-13.50",
+        "percentChange": "-39.71"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "允消無黴乳膏",
+      "enName": "WINSOLVE ANTIFUNGAL CREAM",
+      "ingredient": "MICONAZOLE NITRATE 20 MG/GM",
+      "manufacturer": "永信藥品工業股份有限公司"
+    },
+    "2026-10-01": {
+      "chName": "允消無黴乳膏",
+      "enName": "WINSOLVE ANTIFUNGAL CREAM",
+      "ingredient": "MICONAZOLE NITRATE 20 MG/GM",
+      "manufacturer": "永信藥品工業股份有限公司"
+    }
+  }
+}

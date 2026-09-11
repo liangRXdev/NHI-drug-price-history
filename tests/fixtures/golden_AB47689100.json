@@ -1,0 +1,239 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 12,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "2013-12-01",
+      "to": "2014-04-30",
+      "rawPrice": "11.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2014-05-01",
+      "to": "2015-03-31",
+      "rawPrice": "10.90",
+      "priceState": "priced"
+    },
+    {
+      "from": "2015-04-01",
+      "to": "2016-03-31",
+      "rawPrice": "10.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2016-04-01",
+      "to": "2017-03-31",
+      "rawPrice": "9.60",
+      "priceState": "priced"
+    },
+    {
+      "from": "2017-04-01",
+      "to": "2018-04-30",
+      "rawPrice": "8.90",
+      "priceState": "priced"
+    },
+    {
+      "from": "2018-05-01",
+      "to": "2019-03-31",
+      "rawPrice": "8.20",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-04-01",
+      "to": "2020-09-30",
+      "rawPrice": "7.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2020-10-01",
+      "to": "2021-12-31",
+      "rawPrice": "8.20",
+      "priceState": "priced"
+    },
+    {
+      "from": "2022-01-01",
+      "to": "2023-03-31",
+      "rawPrice": "7.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2023-04-01",
+      "to": "2024-03-31",
+      "rawPrice": "7.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2024-04-01",
+      "to": "2026-09-30",
+      "rawPrice": "6.90",
+      "priceState": "priced"
+    },
+    {
+      "from": "2026-10-01",
+      "to": null,
+      "rawPrice": "7.90",
+      "priceState": "priced"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "11.40",
+      "absoluteChange": "-0.50",
+      "percentChange": "-4.39",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "10.90",
+      "absoluteChange": "-0.90",
+      "percentChange": "-8.26",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "10.00",
+      "absoluteChange": "-0.40",
+      "percentChange": "-4.00",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "9.60",
+      "absoluteChange": "-0.70",
+      "percentChange": "-7.29",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "8.90",
+      "absoluteChange": "-0.70",
+      "percentChange": "-7.87",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "8.20",
+      "absoluteChange": "-0.40",
+      "percentChange": "-4.88",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "increase",
+      "previousPrice": "7.80",
+      "absoluteChange": "0.40",
+      "percentChange": "5.13",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "8.20",
+      "absoluteChange": "-0.40",
+      "percentChange": "-4.88",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "7.80",
+      "absoluteChange": "-0.50",
+      "percentChange": "-6.41",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "7.30",
+      "absoluteChange": "-0.40",
+      "percentChange": "-5.48",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "increase",
+      "previousPrice": "6.90",
+      "absoluteChange": "1.00",
+      "percentChange": "14.49",
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "priced",
+      "current": {
+        "from": "2024-04-01",
+        "rawPrice": "6.90"
+      },
+      "upcoming": {
+        "from": "2026-10-01",
+        "rawPrice": "7.90",
+        "eventType": "increase"
+      },
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2024-04-01",
+        "previousPrice": "7.30"
+      },
+      "priceChangeCount": 10,
+      "pricedCount": 11,
+      "totalChange": {
+        "absoluteChange": "-4.50",
+        "percentChange": "-39.47"
+      }
+    },
+    "2026-10-01": {
+      "status": "priced",
+      "current": {
+        "from": "2026-10-01",
+        "rawPrice": "7.90"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "increase",
+        "from": "2026-10-01",
+        "previousPrice": "6.90"
+      },
+      "priceChangeCount": 11,
+      "pricedCount": 12,
+      "totalChange": {
+        "absoluteChange": "-3.50",
+        "percentChange": "-30.70"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "癲合膜衣錠300毫克",
+      "enName": "Neurtrol F.C. Tablets 300mg",
+      "ingredient": "OXCARBAZEPINE 300 MG",
+      "manufacturer": "健亞生物科技股份有限公司"
+    },
+    "2026-10-01": {
+      "chName": "癲合膜衣錠300毫克",
+      "enName": "Neurtrol F.C. Tablets 300mg",
+      "ingredient": "OXCARBAZEPINE 300 MG",
+      "manufacturer": "健亞生物科技股份有限公司"
+    }
+  }
+}

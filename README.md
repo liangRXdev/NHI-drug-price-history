@@ -11,7 +11,7 @@
 ## 目前進度
 
 - [x] Phase 1 資料層：ETL、index／history shards、guards、單元測試、CI workflow
-- [ ] Phase 1 golden 人工核對（`docs/golden_check_2026-09-11.xlsx`，預告代號須於 2026-10-01 前完成）
+- [x] Phase 1 golden 人工核對：11 個代號、114 列於健保署查詢網站核對全數相符（2026-09-11），已凍結為 `tests/fixtures/golden_*.json`
 - [ ] Phase 2 前端 dashboard
 
 ## 資料語意（摘要）

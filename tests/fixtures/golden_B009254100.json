@@ -1,0 +1,193 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 9,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "1995-03-01",
+      "to": "2003-02-28",
+      "rawPrice": "7.26",
+      "priceState": "priced"
+    },
+    {
+      "from": "2003-03-01",
+      "to": "2006-10-31",
+      "rawPrice": "7.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2006-11-01",
+      "to": "2007-08-31",
+      "rawPrice": "6.50",
+      "priceState": "priced"
+    },
+    {
+      "from": "2007-09-01",
+      "to": "2009-09-30",
+      "rawPrice": "6.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2009-10-01",
+      "to": "2011-11-30",
+      "rawPrice": "5.20",
+      "priceState": "priced"
+    },
+    {
+      "from": "2011-12-01",
+      "to": "2014-06-30",
+      "rawPrice": "4.91",
+      "priceState": "priced"
+    },
+    {
+      "from": "2014-07-01",
+      "to": "2014-07-31",
+      "rawPrice": "4.81",
+      "priceState": "priced"
+    },
+    {
+      "from": "2014-08-01",
+      "to": "2015-01-31",
+      "rawPrice": "-",
+      "priceState": "suspended"
+    },
+    {
+      "from": "2015-02-01",
+      "to": null,
+      "rawPrice": "0.00",
+      "priceState": "terminated"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "7.26",
+      "absoluteChange": "-0.26",
+      "percentChange": "-3.58",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "7.00",
+      "absoluteChange": "-0.50",
+      "percentChange": "-7.14",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "6.50",
+      "absoluteChange": "-0.10",
+      "percentChange": "-1.54",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "6.40",
+      "absoluteChange": "-1.20",
+      "percentChange": "-18.75",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "5.20",
+      "absoluteChange": "-0.29",
+      "percentChange": "-5.58",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "4.91",
+      "absoluteChange": "-0.10",
+      "percentChange": "-2.04",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "suspended",
+      "previousPrice": "4.81",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "terminated",
+      "previousPrice": "4.81",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "terminated",
+      "current": {
+        "from": "2015-02-01",
+        "rawPrice": "0.00"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2015-02-01",
+        "previousPrice": "4.81"
+      },
+      "priceChangeCount": 6,
+      "pricedCount": 7,
+      "totalChange": {
+        "absoluteChange": "-2.45",
+        "percentChange": "-33.75"
+      }
+    },
+    "2026-10-01": {
+      "status": "terminated",
+      "current": {
+        "from": "2015-02-01",
+        "rawPrice": "0.00"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2015-02-01",
+        "previousPrice": "4.81"
+      },
+      "priceChangeCount": 6,
+      "pricedCount": 7,
+      "totalChange": {
+        "absoluteChange": "-2.45",
+        "percentChange": "-33.75"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "低落美膜衣錠２５公絲",
+      "enName": "LUDIOMIL FILM-COATED TABLETS 25MG",
+      "ingredient": "MAPROTILINE HCL 25 MG",
+      "manufacturer": "新加坡商美納里尼醫藥有限公司台灣分公司"
+    },
+    "2026-10-01": {
+      "chName": "低落美膜衣錠２５公絲",
+      "enName": "LUDIOMIL FILM-COATED TABLETS 25MG",
+      "ingredient": "MAPROTILINE HCL 25 MG",
+      "manufacturer": "新加坡商美納里尼醫藥有限公司台灣分公司"
+    }
+  }
+}

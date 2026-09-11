@@ -1,0 +1,223 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 11,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "2015-02-01",
+      "to": "2015-03-31",
+      "rawPrice": "17.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2015-04-01",
+      "to": "2016-03-31",
+      "rawPrice": "16.60",
+      "priceState": "priced"
+    },
+    {
+      "from": "2016-04-01",
+      "to": "2017-03-31",
+      "rawPrice": "16.10",
+      "priceState": "priced"
+    },
+    {
+      "from": "2017-04-01",
+      "to": "2018-04-30",
+      "rawPrice": "15.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2018-05-01",
+      "to": "2019-03-31",
+      "rawPrice": "14.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-04-01",
+      "to": "2019-05-31",
+      "rawPrice": "13.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-06-01",
+      "to": "2019-11-30",
+      "rawPrice": "-",
+      "priceState": "suspended"
+    },
+    {
+      "from": "2020-12-01",
+      "to": "2021-12-31",
+      "rawPrice": "-",
+      "priceState": "suspended"
+    },
+    {
+      "from": "2022-01-01",
+      "to": "2022-11-30",
+      "rawPrice": "-",
+      "priceState": "suspended"
+    },
+    {
+      "from": "2022-12-01",
+      "to": "2023-11-30",
+      "rawPrice": "-",
+      "priceState": "suspended"
+    },
+    {
+      "from": "2023-12-01",
+      "to": null,
+      "rawPrice": "-",
+      "priceState": "suspended"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "17.80",
+      "absoluteChange": "-1.20",
+      "percentChange": "-6.74",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "16.60",
+      "absoluteChange": "-0.50",
+      "percentChange": "-3.01",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "16.10",
+      "absoluteChange": "-0.80",
+      "percentChange": "-4.97",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "15.30",
+      "absoluteChange": "-0.90",
+      "percentChange": "-5.88",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "14.40",
+      "absoluteChange": "-0.60",
+      "percentChange": "-4.17",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "suspended",
+      "previousPrice": "13.80",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "unchanged",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": [
+        "gap_before"
+      ]
+    },
+    {
+      "eventType": "unchanged",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "unchanged",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "unchanged",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "suspended",
+      "current": {
+        "from": "2023-12-01",
+        "rawPrice": "-"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "suspended",
+        "from": "2019-06-01",
+        "previousPrice": "13.80"
+      },
+      "priceChangeCount": 5,
+      "pricedCount": 6,
+      "totalChange": {
+        "absoluteChange": "-4.00",
+        "percentChange": "-22.47"
+      }
+    },
+    "2026-10-01": {
+      "status": "suspended",
+      "current": {
+        "from": "2023-12-01",
+        "rawPrice": "-"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "suspended",
+        "from": "2019-06-01",
+        "previousPrice": "13.80"
+      },
+      "priceChangeCount": 5,
+      "pricedCount": 6,
+      "totalChange": {
+        "absoluteChange": "-4.00",
+        "percentChange": "-22.47"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "萬克適錠90毫克",
+      "enName": "ARCOXIA TABLET 90MG",
+      "ingredient": "ETORICOXIB 90 MG",
+      "manufacturer": "荷蘭商歐嘉隆有限公司台灣分公司"
+    },
+    "2026-10-01": {
+      "chName": "萬克適錠90毫克",
+      "enName": "ARCOXIA TABLET 90MG",
+      "ingredient": "ETORICOXIB 90 MG",
+      "manufacturer": "荷蘭商歐嘉隆有限公司台灣分公司"
+    }
+  }
+}

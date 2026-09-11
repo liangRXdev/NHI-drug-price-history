@@ -1,0 +1,193 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 9,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "2013-08-01",
+      "to": "2014-06-30",
+      "rawPrice": "4.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2014-07-01",
+      "to": "2015-03-31",
+      "rawPrice": "5.70",
+      "priceState": "priced"
+    },
+    {
+      "from": "2015-04-01",
+      "to": "2016-03-31",
+      "rawPrice": "5.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2016-04-01",
+      "to": "2017-03-31",
+      "rawPrice": "5.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2017-04-01",
+      "to": "2018-04-30",
+      "rawPrice": "5.10",
+      "priceState": "priced"
+    },
+    {
+      "from": "2018-05-01",
+      "to": "2019-03-31",
+      "rawPrice": "4.98",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-04-01",
+      "to": "2020-09-30",
+      "rawPrice": "4.92",
+      "priceState": "priced"
+    },
+    {
+      "from": "2020-10-01",
+      "to": "2025-08-31",
+      "rawPrice": "4.88",
+      "priceState": "priced"
+    },
+    {
+      "from": "2025-09-01",
+      "to": null,
+      "rawPrice": "0.00",
+      "priceState": "terminated"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "increase",
+      "previousPrice": "4.80",
+      "absoluteChange": "0.90",
+      "percentChange": "18.75",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "5.70",
+      "absoluteChange": "-0.30",
+      "percentChange": "-5.26",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "5.40",
+      "absoluteChange": "-0.10",
+      "percentChange": "-1.85",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "5.30",
+      "absoluteChange": "-0.20",
+      "percentChange": "-3.77",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "5.10",
+      "absoluteChange": "-0.12",
+      "percentChange": "-2.35",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "4.98",
+      "absoluteChange": "-0.06",
+      "percentChange": "-1.20",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "4.92",
+      "absoluteChange": "-0.04",
+      "percentChange": "-0.81",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "terminated",
+      "previousPrice": "4.88",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "terminated",
+      "current": {
+        "from": "2025-09-01",
+        "rawPrice": "0.00"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2025-09-01",
+        "previousPrice": "4.88"
+      },
+      "priceChangeCount": 7,
+      "pricedCount": 8,
+      "totalChange": {
+        "absoluteChange": "0.08",
+        "percentChange": "1.67"
+      }
+    },
+    "2026-10-01": {
+      "status": "terminated",
+      "current": {
+        "from": "2025-09-01",
+        "rawPrice": "0.00"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2025-09-01",
+        "previousPrice": "4.88"
+      },
+      "priceChangeCount": 7,
+      "pricedCount": 8,
+      "totalChange": {
+        "absoluteChange": "0.08",
+        "percentChange": "1.67"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "緒得克糖衣錠 1毫克",
+      "enName": "Moodytec S.C. Tablets 1 mg",
+      "ingredient": "FLUPENTIXOL (2HCL) 1 MG",
+      "manufacturer": "瑞士藥廠股份有限公司"
+    },
+    "2026-10-01": {
+      "chName": "緒得克糖衣錠 1毫克",
+      "enName": "Moodytec S.C. Tablets 1 mg",
+      "ingredient": "FLUPENTIXOL (2HCL) 1 MG",
+      "manufacturer": "瑞士藥廠股份有限公司"
+    }
+  }
+}

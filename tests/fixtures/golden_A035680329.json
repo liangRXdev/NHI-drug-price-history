@@ -1,0 +1,167 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 7,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "1997-03-01",
+      "to": "2001-03-31",
+      "rawPrice": "60.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2001-04-01",
+      "to": "2006-10-31",
+      "rawPrice": "59.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2006-11-01",
+      "to": "2007-08-31",
+      "rawPrice": "47.10",
+      "priceState": "priced"
+    },
+    {
+      "from": "2007-09-01",
+      "to": "2009-09-30",
+      "rawPrice": "35.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2009-10-01",
+      "to": "2010-03-31",
+      "rawPrice": "24.60",
+      "priceState": "priced"
+    },
+    {
+      "from": "2010-04-01",
+      "to": "2010-08-31",
+      "rawPrice": "23.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2010-10-01",
+      "to": null,
+      "rawPrice": "0.00",
+      "priceState": "terminated"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "60.00",
+      "absoluteChange": "-1.00",
+      "percentChange": "-1.67",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "59.00",
+      "absoluteChange": "-11.90",
+      "percentChange": "-20.17",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "47.10",
+      "absoluteChange": "-11.80",
+      "percentChange": "-25.05",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "35.30",
+      "absoluteChange": "-10.70",
+      "percentChange": "-30.31",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "24.60",
+      "absoluteChange": "-0.80",
+      "percentChange": "-3.25",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "terminated",
+      "previousPrice": "23.80",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": [
+        "gap_before"
+      ]
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "terminated",
+      "current": {
+        "from": "2010-10-01",
+        "rawPrice": "0.00"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2010-10-01",
+        "previousPrice": "23.80"
+      },
+      "priceChangeCount": 5,
+      "pricedCount": 6,
+      "totalChange": {
+        "absoluteChange": "-36.20",
+        "percentChange": "-60.33"
+      }
+    },
+    "2026-10-01": {
+      "status": "terminated",
+      "current": {
+        "from": "2010-10-01",
+        "rawPrice": "0.00"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2010-10-01",
+        "previousPrice": "23.80"
+      },
+      "priceChangeCount": 5,
+      "pricedCount": 6,
+      "totalChange": {
+        "absoluteChange": "-36.20",
+        "percentChange": "-60.33"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "\"生達\" 舒疹乳膏0.5毫克/公克（可洛貝他素）",
+      "enName": "S.Z. CREAM 0.5MG/G \"STANDARD\" (CLOBETASOL)",
+      "ingredient": "CLOBETASOL PROPIONATE .5 MG/GM",
+      "manufacturer": "生達化學製藥股份有限公司二廠"
+    },
+    "2026-10-01": {
+      "chName": "\"生達\" 舒疹乳膏0.5毫克/公克（可洛貝他素）",
+      "enName": "S.Z. CREAM 0.5MG/G \"STANDARD\" (CLOBETASOL)",
+      "ingredient": "CLOBETASOL PROPIONATE .5 MG/GM",
+      "manufacturer": "生達化學製藥股份有限公司二廠"
+    }
+  }
+}

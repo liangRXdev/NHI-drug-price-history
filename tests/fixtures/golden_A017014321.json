@@ -1,0 +1,403 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 24,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "1997-08-01",
+      "to": "1999-03-31",
+      "rawPrice": "94.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "1999-04-01",
+      "to": "1999-09-30",
+      "rawPrice": "94.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "1999-10-01",
+      "to": "2000-03-31",
+      "rawPrice": "88.36",
+      "priceState": "priced"
+    },
+    {
+      "from": "2000-04-01",
+      "to": "2000-09-30",
+      "rawPrice": "74.57",
+      "priceState": "priced"
+    },
+    {
+      "from": "2000-10-01",
+      "to": "2001-03-31",
+      "rawPrice": "82.72",
+      "priceState": "priced"
+    },
+    {
+      "from": "2001-04-01",
+      "to": "2001-09-30",
+      "rawPrice": "76.63",
+      "priceState": "priced"
+    },
+    {
+      "from": "2001-10-01",
+      "to": "2003-02-28",
+      "rawPrice": "75.20",
+      "priceState": "priced"
+    },
+    {
+      "from": "2003-03-01",
+      "to": "2006-10-31",
+      "rawPrice": "69.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2006-11-01",
+      "to": "2007-08-31",
+      "rawPrice": "61.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2007-09-01",
+      "to": "2009-09-30",
+      "rawPrice": "56.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2009-10-01",
+      "to": "2011-11-30",
+      "rawPrice": "43.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2011-12-01",
+      "to": "2014-06-30",
+      "rawPrice": "40.90",
+      "priceState": "priced"
+    },
+    {
+      "from": "2014-07-01",
+      "to": "2015-03-31",
+      "rawPrice": "39.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2015-04-01",
+      "to": "2016-03-31",
+      "rawPrice": "36.10",
+      "priceState": "priced"
+    },
+    {
+      "from": "2016-04-01",
+      "to": "2017-03-31",
+      "rawPrice": "36.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2017-04-01",
+      "to": "2018-04-30",
+      "rawPrice": "35.60",
+      "priceState": "priced"
+    },
+    {
+      "from": "2018-05-01",
+      "to": "2019-03-31",
+      "rawPrice": "35.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-04-01",
+      "to": "2020-09-30",
+      "rawPrice": "34.20",
+      "priceState": "priced"
+    },
+    {
+      "from": "2020-10-01",
+      "to": "2021-12-31",
+      "rawPrice": "33.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2022-01-01",
+      "to": "2023-03-31",
+      "rawPrice": "32.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2023-04-01",
+      "to": "2024-03-31",
+      "rawPrice": "31.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2024-04-01",
+      "to": "2025-03-31",
+      "rawPrice": "29.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2025-04-01",
+      "to": "2026-03-31",
+      "rawPrice": "29.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2026-04-01",
+      "to": null,
+      "rawPrice": "28.10",
+      "priceState": "priced"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "unchanged",
+      "previousPrice": "94.00",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "94.00",
+      "absoluteChange": "-5.64",
+      "percentChange": "-6.00",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "88.36",
+      "absoluteChange": "-13.79",
+      "percentChange": "-15.61",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "increase",
+      "previousPrice": "74.57",
+      "absoluteChange": "8.15",
+      "percentChange": "10.93",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "82.72",
+      "absoluteChange": "-6.09",
+      "percentChange": "-7.36",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "76.63",
+      "absoluteChange": "-1.43",
+      "percentChange": "-1.87",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "75.20",
+      "absoluteChange": "-6.20",
+      "percentChange": "-8.24",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "69.00",
+      "absoluteChange": "-8.00",
+      "percentChange": "-11.59",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "61.00",
+      "absoluteChange": "-5.00",
+      "percentChange": "-8.20",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "56.00",
+      "absoluteChange": "-12.60",
+      "percentChange": "-22.50",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "43.40",
+      "absoluteChange": "-2.50",
+      "percentChange": "-5.76",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "40.90",
+      "absoluteChange": "-1.10",
+      "percentChange": "-2.69",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "39.80",
+      "absoluteChange": "-3.70",
+      "percentChange": "-9.30",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "36.10",
+      "absoluteChange": "-0.10",
+      "percentChange": "-0.28",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "36.00",
+      "absoluteChange": "-0.40",
+      "percentChange": "-1.11",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "35.60",
+      "absoluteChange": "-0.60",
+      "percentChange": "-1.69",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "35.00",
+      "absoluteChange": "-0.80",
+      "percentChange": "-2.29",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "34.20",
+      "absoluteChange": "-0.80",
+      "percentChange": "-2.34",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "33.40",
+      "absoluteChange": "-1.10",
+      "percentChange": "-3.29",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "32.30",
+      "absoluteChange": "-1.30",
+      "percentChange": "-4.02",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "31.00",
+      "absoluteChange": "-1.20",
+      "percentChange": "-3.87",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "29.80",
+      "absoluteChange": "-0.80",
+      "percentChange": "-2.68",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "29.00",
+      "absoluteChange": "-0.90",
+      "percentChange": "-3.10",
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "priced",
+      "current": {
+        "from": "2026-04-01",
+        "rawPrice": "28.10"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2026-04-01",
+        "previousPrice": "29.00"
+      },
+      "priceChangeCount": 22,
+      "pricedCount": 24,
+      "totalChange": {
+        "absoluteChange": "-65.90",
+        "percentChange": "-70.11"
+      }
+    },
+    "2026-10-01": {
+      "status": "priced",
+      "current": {
+        "from": "2026-04-01",
+        "rawPrice": "28.10"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2026-04-01",
+        "previousPrice": "29.00"
+      },
+      "priceChangeCount": 22,
+      "pricedCount": 24,
+      "totalChange": {
+        "absoluteChange": "-65.90",
+        "percentChange": "-70.11"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "\"中生\" 膚得適乳膏",
+      "enName": "FLUDEX CREAM (FLUOCINONIDE) \"CBC\"",
+      "ingredient": "FLUOCINONIDE .5 MG/GM",
+      "manufacturer": "中生生技製藥股份有限公司淡水廠"
+    },
+    "2026-10-01": {
+      "chName": "\"中生\" 膚得適乳膏",
+      "enName": "FLUDEX CREAM (FLUOCINONIDE) \"CBC\"",
+      "ingredient": "FLUOCINONIDE .5 MG/GM",
+      "manufacturer": "中生生技製藥股份有限公司淡水廠"
+    }
+  }
+}

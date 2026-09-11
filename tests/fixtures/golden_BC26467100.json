@@ -1,0 +1,211 @@
+{
+  "verifiedBy": "liangRxdev",
+  "verifiedAt": "2026-09-11",
+  "verificationSource": "健保署藥品查詢網站",
+  "siteRowCount": 10,
+  "siteRowNote": "",
+  "notes": {},
+  "intervals": [
+    {
+      "from": "2015-06-01",
+      "to": "2019-03-31",
+      "rawPrice": "24.80",
+      "priceState": "priced"
+    },
+    {
+      "from": "2019-04-01",
+      "to": "2020-09-30",
+      "rawPrice": "22.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2020-10-01",
+      "to": "2021-12-31",
+      "rawPrice": "20.90",
+      "priceState": "priced"
+    },
+    {
+      "from": "2022-01-01",
+      "to": "2023-03-31",
+      "rawPrice": "20.00",
+      "priceState": "priced"
+    },
+    {
+      "from": "2023-04-01",
+      "to": "2023-08-31",
+      "rawPrice": "19.30",
+      "priceState": "priced"
+    },
+    {
+      "from": "2023-09-01",
+      "to": "2023-11-30",
+      "rawPrice": "14.70",
+      "priceState": "priced"
+    },
+    {
+      "from": "2023-12-01",
+      "to": "2024-08-31",
+      "rawPrice": "10.50",
+      "priceState": "priced"
+    },
+    {
+      "from": "2024-09-01",
+      "to": "2025-08-31",
+      "rawPrice": "9.10",
+      "priceState": "priced"
+    },
+    {
+      "from": "2025-09-01",
+      "to": "2026-09-30",
+      "rawPrice": "7.40",
+      "priceState": "priced"
+    },
+    {
+      "from": "2026-10-01",
+      "to": null,
+      "rawPrice": "0",
+      "priceState": "terminated"
+    }
+  ],
+  "invalidRecords": [],
+  "events": [
+    {
+      "eventType": "initial",
+      "previousPrice": null,
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "24.80",
+      "absoluteChange": "-2.40",
+      "percentChange": "-9.68",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "22.40",
+      "absoluteChange": "-1.50",
+      "percentChange": "-6.70",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "20.90",
+      "absoluteChange": "-0.90",
+      "percentChange": "-4.31",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "20.00",
+      "absoluteChange": "-0.70",
+      "percentChange": "-3.50",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "19.30",
+      "absoluteChange": "-4.60",
+      "percentChange": "-23.83",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "14.70",
+      "absoluteChange": "-4.20",
+      "percentChange": "-28.57",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "10.50",
+      "absoluteChange": "-1.40",
+      "percentChange": "-13.33",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "decrease",
+      "previousPrice": "9.10",
+      "absoluteChange": "-1.70",
+      "percentChange": "-18.68",
+      "crossesStop": false,
+      "flags": []
+    },
+    {
+      "eventType": "terminated",
+      "previousPrice": "7.40",
+      "absoluteChange": null,
+      "percentChange": null,
+      "crossesStop": false,
+      "flags": []
+    }
+  ],
+  "summaries": {
+    "2026-09-11": {
+      "status": "priced",
+      "current": {
+        "from": "2025-09-01",
+        "rawPrice": "7.40"
+      },
+      "upcoming": {
+        "from": "2026-10-01",
+        "rawPrice": "0",
+        "eventType": "terminated"
+      },
+      "latestEvent": {
+        "eventType": "decrease",
+        "from": "2025-09-01",
+        "previousPrice": "9.10"
+      },
+      "priceChangeCount": 8,
+      "pricedCount": 9,
+      "totalChange": {
+        "absoluteChange": "-17.40",
+        "percentChange": "-70.16"
+      }
+    },
+    "2026-10-01": {
+      "status": "terminated",
+      "current": {
+        "from": "2026-10-01",
+        "rawPrice": "0"
+      },
+      "upcoming": null,
+      "latestEvent": {
+        "eventType": "terminated",
+        "from": "2026-10-01",
+        "previousPrice": "7.40"
+      },
+      "priceChangeCount": 8,
+      "pricedCount": 9,
+      "totalChange": {
+        "absoluteChange": "-17.40",
+        "percentChange": "-70.16"
+      }
+    }
+  },
+  "meta": {
+    "2026-09-11": {
+      "chName": "力脈樂10/160/12.5毫克膜衣錠",
+      "enName": "Dafiro HCT 10/160/12.5mg Film-Coated Tablets",
+      "ingredient": "VALSARTAN 160 MG+AMLODIPINE BESYLATE 10 MG+HYDROCHLOROTHIAZIDE 12.5 MG",
+      "manufacturer": "裕利股份有限公司"
+    },
+    "2026-10-01": {
+      "chName": "力脈樂10/160/12.5毫克膜衣錠",
+      "enName": "Dafiro HCT 10/160/12.5mg Film-Coated Tablets",
+      "ingredient": "VALSARTAN 160 MG+2412402210 10 MG+4028100600 12.5 MG",
+      "manufacturer": "裕利股份有限公司"
+    }
+  }
+}
