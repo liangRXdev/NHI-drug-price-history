@@ -12,8 +12,10 @@
 
 - [x] Phase 1 資料層：ETL、index／history shards、guards、單元測試、CI workflow
 - [x] Phase 1 golden 人工核對：11 個代號、114 列於健保署查詢網站核對全數相符（2026-09-11），已凍結為 `tests/fixtures/golden_*.json`
-- [x] Phase 2 前端 dashboard：搜尋、摘要、手刻 SVG 階梯圖、歷史表、`?code=` deep link、過期警示、四態載入與競態（驗收紀錄：[`.ai-review/phase2-acceptance.md`](.ai-review/phase2-acceptance.md)）
-- [ ] Phase 2 待辦：C2 截圖藥師目檢、E7 兩項未達標待決定、啟用 GitHub Pages
+- [x] Phase 2 前端 dashboard：搜尋、摘要、手刻 SVG 階梯圖、歷史表、`?code=` deep link、過期警示、四態載入與競態（驗收紀錄：[`.ai-review/phase2-acceptance.md`](.ai-review/phase2-acceptance.md)；`/codex-review` 判定：[`.ai-review/verdict.md`](.ai-review/verdict.md)）
+  - C2 截圖藥師目檢通過；E7 兩項未達目標，MVP 接受現況（2026-09-12）
+- [x] 上線：https://liangrxdev.github.io/NHI-drug-price-history/（2026-09-12）
+- [ ] Phase 3：`TFDA-drug-info-search` 各健保品項加「查看健保藥價歷史 ↗」
 
 ## 資料語意（摘要）
 
@@ -46,6 +48,7 @@ npm test                                           # engine.js 純邏輯 + golde
 npx playwright install chromium                    # 首次
 npm run e2e                                        # DOM／viewport／競態（route mock）
 node scripts/measure_e7.mjs                        # E7 效能量測 + C2 截圖（非 CI）
+node scripts/smoke_live.mjs                        # 部署後線上 smoke check（deep link、搜尋、資料版本、SW）
 uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 JS 用 golden fixture
 ```
 
@@ -69,4 +72,5 @@ uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 J
 
 - GitHub Pages：Settings → Pages → Deploy from branch → `main` / `(root)`
 - `build-data.yml`：每週一 02:00（台灣）檢查；`contents: write`；actions 皆 pin commit SHA
+  - info.nhi.gov.tw 偶發 `RemoteDisconnected`（2026-09-12 連三次失敗、20 分鐘後重跑成功；TFDA 專案 2026-08-30 同樣現象）。失敗時不寫入任何檔案，下次排程或手動 Run workflow 即可
 - `test.yml`：PR 與 push 時執行測試（唯讀）
