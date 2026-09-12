@@ -15,7 +15,7 @@
 - [x] Phase 2 前端 dashboard：搜尋、摘要、手刻 SVG 階梯圖、歷史表、`?code=` deep link、過期警示、四態載入與競態（驗收紀錄：[`.ai-review/phase2-acceptance.md`](.ai-review/phase2-acceptance.md)；`/codex-review` 判定：[`.ai-review/verdict.md`](.ai-review/verdict.md)）
   - C2 截圖藥師目檢通過；E7 兩項未達目標，MVP 接受現況（2026-09-12）
 - [x] 上線：https://liangrxdev.github.io/NHI-drug-price-history/（2026-09-12）
-- [ ] Phase 3：`TFDA-drug-info-search` 各健保品項加「查看健保藥價歷史 ↗」
+- [x] Phase 3：`TFDA-drug-info-search` 健保代號表新增「健保藥價歷史 → 查看 ↗」欄（2026-09-12，`62de833`，線上端到端驗證通過）
 
 ## 資料語意（摘要）
 
