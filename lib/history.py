@@ -242,11 +242,13 @@ def meta_payload(records, invalid):
     distinct = {tuple(_descriptive(row).items()) for row in all_rows}
     if len(distinct) <= 1:
         return "meta", _descriptive(all_rows[0]), False
+    # recordIndex：變體首次出現之 record 的索引。只記 from 時，同起日、不同描述的兩列
+    # 無法對應回 select_meta_row 選中的那一列（codex R4）
     variants, last = [], None
-    for r in records:
+    for i, r in enumerate(records):
         d = _descriptive(r["row"])
         if d != last:
-            variants.append({"from": r["from"].isoformat(), **d})
+            variants.append({"from": r["from"].isoformat(), "recordIndex": i, **d})
             last = d
     if not variants:   # 只有 invalid 列時退回第一列，避免詳細頁無品名可顯示
         return "meta", _descriptive(all_rows[0]), True

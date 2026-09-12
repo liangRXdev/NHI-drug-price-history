@@ -156,8 +156,9 @@ button:hover { background: var(--accent-light); }
 .chart .band-term { fill: url(#hatchTerm); }
 .chart .band-susp { fill: url(#dotsSusp); }
 .chart .band-unknown { fill: url(#crossUnknown); }
+.chart .band-zero { fill: url(#lineZero); }
 .chart .band-gap { fill: #F3EFE8; }
-.chart .band-upcoming { opacity: 0.55; }
+.chart .band-upcoming { opacity: 0.55; stroke: var(--text-primary); stroke-width: 1; stroke-dasharray: 5 4; }   /* 預告：淡色＋虛線框 */
 .chart .today line { stroke: var(--text-primary); stroke-dasharray: 2 3; }
 .chart .marker { stroke: #fff; stroke-width: 1; }
 .chart .marker.increase { fill: var(--c-term); }

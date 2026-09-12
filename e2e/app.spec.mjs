@@ -3,8 +3,14 @@ import { test, expect } from '@playwright/test';
 import { buildData, mockSite, statusDaysAgo } from './mock.mjs';
 
 const detail = (page) => page.locator('#detail');
+// 先清空並等「請輸入」提示出現，再輸入：避免上一次查詢的結果讓本次斷言假通過（codex T4）
 const search = async (page, q) => {
-  await page.locator('#q').fill(q);
+  const input = page.locator('#q');
+  await expect(input).toBeEnabled();
+  await input.fill('');
+  await expect(page.locator('#searchStatus')).toHaveText(/請輸入/);
+  await expect(page.locator('.result')).toHaveCount(0);
+  await input.fill(q);
   await expect(page.locator('#searchStatus')).not.toHaveText(/載入中|請輸入/);
 };
 
@@ -57,6 +63,8 @@ test('C1 window 耗盡：搜尋卡顯示「需更新」且無確定價格；詳�
   const first = page.locator('.result').first();
   await expect(first).toContainText('需更新，請開啟詳細頁');
   await expect(first.locator('.r-price .val')).toHaveCount(0);
+  await first.click();                                          // 詳細頁仍由完整 history 判定（shard 未改）
+  await expect(detail(page).locator('.metric.key .val')).toContainText('12.50');
 });
 
 // ── C3 過期警示 ─────────────────────────────────────────────────
@@ -111,7 +119,7 @@ test('C4 中文／英文／成分；終止品項不排除；空白與不存在',
 });
 
 // ── C5 deep link ────────────────────────────────────────────────
-for (const [code, name] of [['AC48092100', '撫緒'], ['B009254100', '']]) {
+for (const [code, name, price] of [['AC48092100', '撫緒', /^\d+\.\d{2}\s*元$/], ['B009254100', '', /已終止支付（終止前 4\.81 元）/]]) {
   test(`C5 ?code=${code} 直接開啟與重新整理`, async ({ page }) => {
     const { data } = await mockSite(page);
     await page.goto(`/?code=${code}`);
@@ -120,6 +128,9 @@ for (const [code, name] of [['AC48092100', '撫緒'], ['B009254100', '']]) {
     for (let i = 0; i < 2; i++) {
       await expect(detail(page).locator('.detail-head .code')).toHaveText(code);
       if (name) await expect(detail(page).locator('.detail-head h2')).toContainText(name);
+      // 現行價須與 URL 代號的 history 相符（codex T8）
+      await expect(detail(page).locator('.metric.key .val')).toHaveText(price);
+      if (last.priceState === 'priced') await expect(detail(page).locator('.metric.key .val')).toContainText(last.rawPrice);
       await expect(detail(page).locator('tr[data-kind="record"]')).toHaveCount(records.length);
       await expect(detail(page).locator('tr[data-kind="record"]').first()).toContainText(last.from);
       await expect(page).toHaveTitle(new RegExp(code));
@@ -244,25 +255,39 @@ test('C7 shard 損毀或缺預期代號 → 錯誤狀態', async ({ page }) => {
   await expect(detail(page).locator('.metric')).toHaveCount(0);
 });
 
-test('C7 競態：選 A（延遲 2 秒）後立即選 B → 最終只有 B', async ({ page }) => {
+test('C7 競態：選 A（回應由測試控制）後立即選 B → A 回應當下與之後都只有 B', async ({ page }) => {
+  let releaseA;
+  const aHeld = new Promise((r) => { releaseA = r; });
+  let aArrived;
+  const aRequested = new Promise((r) => { aArrived = r; });
   await mockSite(page, {
     shard: async (prefix, attempt, route, data) => {
       if (prefix !== 'AC48') return false;
-      await new Promise((r) => setTimeout(r, 2000));
+      aArrived();
+      await aHeld;
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data.shards.AC48) })
         .catch(() => {});
     },
   });
   await page.goto('/');
   await search(page, 'AC48092100');
-  await page.locator('.result').first().click();              // A：AC48 分片延遲
+  await page.locator('.result').first().click();              // A：AC48 分片被扣住
+  await aRequested;
   await page.goBack();
   await search(page, 'B009254100');
   await page.locator('.result').first().click();              // B：即時
   await expect(detail(page).locator('.detail-head .code')).toHaveText('B009254100');
-  await page.waitForTimeout(2500);
+
+  // 記錄 A 回應釋放後的每一次 DOM 變動：任何時刻都不得出現 A 的代號（codex T5）
+  await page.evaluate(() => {
+    window.__sawA = false;
+    new MutationObserver(() => { if (document.getElementById('detail').textContent.includes('AC48092100')) window.__sawA = true; })
+      .observe(document.getElementById('detail'), { childList: true, subtree: true, characterData: true });
+  });
+  releaseA();
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.__sawA)).toBe(false);
   await expect(detail(page).locator('.detail-head .code')).toHaveText('B009254100');
-  await expect(detail(page)).not.toContainText('AC48092100');
   await expect(page).toHaveURL(/code=B009254100/);
 });
 
@@ -291,6 +316,49 @@ test('C8 index 先失敗、重試成功後可查詢', async ({ page }) => {
   await expect(page.locator('#q')).toBeEnabled();
   await search(page, '撫緒');
   await expect(page.locator('.result[data-code="AC48092100"]')).toHaveCount(1);
+});
+
+test('C8 重試載入期間重試鈕消失、不可重複觸發；完成後可查詢（codex R6）', async ({ page }) => {
+  const data = buildData();
+  let n = 0;
+  let release;
+  const held = new Promise((r) => { release = r; });
+  // status 永不回應：避免 status handler 順手重繪橫幅而遮蔽「載入開始時未清橫幅」的缺陷
+  await mockSite(page, { data, status: 'pending' });
+  await page.route('**/data/drug_index.json', async (route) => {
+    n += 1;
+    if (n === 1) return route.fulfill({ status: 500, body: '' });
+    await held;                                                // 重試那次被扣住
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data.index) }).catch(() => {});
+  });
+  await page.goto('/');
+  const retry = page.locator('#banners button', { hasText: '重試' });
+  await retry.click();
+  await expect(retry).toHaveCount(0);                          // 載入中：舊錯誤訊息與重試鈕已清除
+  await expect(page.locator('#banners .alert--error')).toHaveCount(0);
+  await expect(page.locator('#q')).toBeDisabled();
+  await expect(page.locator('body')).not.toContainText('查無');
+  release();
+  await expect(page.locator('#q')).toBeEnabled();
+  expect(n).toBe(2);                                           // 沒有第三次請求
+  await search(page, '撫緒');
+  await expect(page.locator('.result[data-code="AC48092100"]')).toHaveCount(1);
+});
+
+test('C8 status 卡住期間：查詢照常可用，來源資訊顯示載入中（codex R7）', async ({ page }) => {
+  await mockSite(page, { status: 'pending' });                              // 預設逾時 20 秒，測試期間不會到
+  await page.goto('/?code=AC48092100');
+  await expect(detail(page).locator('.metric.key')).toBeVisible();          // 不被 status 阻塞
+  await expect(page.locator('#sourceInfo')).toContainText('載入中');
+  await expect(page.locator('#banners [data-stale]')).toHaveCount(0);
+});
+
+test('C3 status 永不回應 → 逾時後轉紅並於現行價旁加註（codex R7）', async ({ page }) => {
+  await mockSite(page, { status: 'pending', timeouts: { status: 800 } });
+  await page.goto('/?code=AC48092100');
+  await expect(page.locator('#banners [data-stale]')).toHaveAttribute('data-stale', 'red');
+  await expect(detail(page).locator('[data-stale-note]')).toHaveCount(1);
+  await expect(page.locator('#sourceInfo')).toContainText('無法取得');
 });
 
 test('E6 index 與 meta 版本不一致 → 提示重新整理，不可搜尋', async ({ page }) => {
@@ -331,9 +399,22 @@ test('E3 表格列數＝records＋invalidRecords；日期異常列照實顯示',
   await page.goto('/?code=AC48092100');
   await expect(detail(page).locator('table.history tbody tr')).toHaveCount(entry.records.length + 1);
   const bad = detail(page).locator('tr[data-kind="invalid"]');
-  await expect(bad).toContainText('1041301');
+  await expect(bad.locator('td').nth(0)).toHaveText('1041301');
+  await expect(bad.locator('td').nth(1)).toHaveText('9991231');
+  await expect(bad.locator('td').nth(2)).toHaveText('12.00');
   await expect(bad).toContainText('日期異常');
   await expect(detail(page).locator('#tableTitle')).toContainText(`${entry.records.length + 1} 筆`);
+  // 逐列比對：新→舊排序下，第 i 列＝records 倒數第 i 筆的起日、迄日、rawPrice（codex T11）
+  const rows = detail(page).locator('tr[data-kind="record"]');
+  const expected = [...entry.records].reverse();
+  for (let i = 0; i < expected.length; i++) {
+    const r = expected[i];
+    const cells = rows.nth(i).locator('td');
+    await expect(cells.nth(0)).toHaveText(r.from);
+    if (r.to) await expect(cells.nth(1)).toHaveText(r.to);
+    await expect(cells.nth(2)).toHaveAttribute('title', `原始值：${r.rawPrice}`);
+    if (r.priceState === 'priced') await expect(cells.nth(2)).toHaveText(r.rawPrice);
+  }
 });
 
 test('E4 品質標記只出現在對應代號', async ({ page }) => {
@@ -356,10 +437,44 @@ test('E5 TFDA 連結文字與 href；給付規定連結為空不顯示', async (
   await expect(detail(page).getByRole('link', { name: /健保給付規定/ })).toHaveCount(0);
 });
 
-test('§5.3 A020296321：首列 0 元在歷史表不含「終止」', async ({ page }) => {
+test('§5.3 A020296321：首列 0 元在歷史表整列、圖表區塊與圖例皆不稱「終止」', async ({ page }) => {
   await mockSite(page);
   await page.goto('/?code=A020296321');
   const firstRow = detail(page).locator('tr[data-kind="record"]').last();   // 新→舊排序，最舊在最後
   await expect(firstRow).toContainText('健保支付價 0 元（此前無有價紀錄）');
-  await expect(firstRow.locator('td').nth(2)).not.toContainText('終止');
+  await expect(firstRow).not.toContainText('終止');                          // 整列（含事件欄），codex T3
+  const svg = detail(page).locator('svg.chart');
+  await expect(svg.locator('[data-band="unpriced_zero"]')).toHaveCount(1);
+  await expect(svg.locator('[data-band="terminated"]')).toHaveCount(0);
+  await expect(svg.locator('[data-band="unpriced_zero"] title')).not.toContainText('終止');
+  await expect(detail(page).locator('[data-legend="unpriced_zero"]')).toHaveText(/健保支付價 0 元（此前無有價紀錄）/);
+  await expect(detail(page).locator('[data-legend="terminated"]')).toHaveCount(0);
+});
+
+test('§5.3 暫停 → 0 元、此前從未有價：事件欄、最新調整、圖例皆不稱「終止」', async ({ page }) => {
+  // golden 無此形態（terminated 事件且 previousPrice 為 null），以 A020296321 為底改寫成合成案例
+  const data = buildData();
+  const entry = data.shards.A020.drugs.A020296321;
+  const base = entry.records[0];
+  entry.records = [
+    { ...base, from: '1995-03-01', to: '1996-12-31', rawPrice: '-', priceState: 'suspended', eventType: 'initial', previousPrice: null },
+    { ...base, from: '1997-01-01', to: null, rawPrice: '0.00', priceState: 'terminated', eventType: 'terminated', previousPrice: null },
+  ];
+  await mockSite(page, { data });
+  await page.goto('/?code=A020296321');
+  const rows = detail(page).locator('tr[data-kind="record"]');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText('0 元（此前無有價紀錄）');
+  await expect(rows.first()).not.toContainText('終止');
+  await expect(detail(page).locator('.metric', { hasText: '最新一次調整' })).not.toContainText('終止');
+  await expect(detail(page).locator('.metric.key')).not.toContainText('終止');
+  await expect(detail(page).locator('[data-legend="terminated"]')).toHaveCount(0);
+});
+
+test('§5.3 一般終止（AC48867100）仍以終止區塊與圖例呈現', async ({ page }) => {
+  await mockSite(page);
+  await page.goto('/?code=AC48867100');
+  await expect(detail(page).locator('svg.chart [data-band="terminated"]')).toHaveCount(1);
+  await expect(detail(page).locator('[data-legend="terminated"]')).toHaveText(/終止支付/);
+  await expect(detail(page).locator('[data-legend="unpriced_zero"]')).toHaveCount(0);
 });

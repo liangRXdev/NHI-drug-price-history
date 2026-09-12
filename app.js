@@ -21,71 +21,106 @@ const state = {
   statusSettled: false,
   today: E.localISODate(),    // 頁面載入與每次選定藥品時取用，不跨午夜自動更新
   shardCache: new Map(),
+  coreSeq: 0,
   detailSeq: 0,
   current: null,              // 目前詳細頁 { code, entry }
   newestFirst: true,
 };
 
+// 逾時（毫秒）：請求卡住時必須在有限時間內轉為錯誤狀態，不可無限顯示「載入中」（codex R7）。
+// index 約 3 MB gzip，慢速網路需較長時間。e2e 可經 window.NHI_FETCH_TIMEOUTS 縮短。
+const TIMEOUT = { meta: 30_000, index: 120_000, status: 20_000, shard: 45_000, ...(globalThis.NHI_FETCH_TIMEOUTS || {}) };
+
 class LoadError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
 }
 
-async function fetchJSON(url) {
-  let res;
+async function fetchJSON(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    res = await fetch(url, { cache: 'no-cache' });
-  } catch {
-    throw new LoadError('network', '網路連線失敗');
-  }
-  if (!res.ok) throw new LoadError('http', `HTTP ${res.status}`);
-  try {
-    return await res.json();
-  } catch {
-    throw new LoadError('invalid', '內容不是有效的 JSON');
+    let res;
+    try {
+      res = await fetch(url, { cache: 'no-cache', signal: ctrl.signal });
+    } catch {
+      throw new LoadError('network', ctrl.signal.aborted ? '連線逾時' : '網路連線失敗');
+    }
+    if (!res.ok) throw new LoadError('http', `HTTP ${res.status}`);
+    try {
+      return await res.json();
+    } catch {
+      throw new LoadError('invalid', ctrl.signal.aborted ? '連線逾時' : '內容不是有效的 JSON');
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 // ── 核心資源（meta、index、status）──────────────────────────────
+// 每次載入帶序號：重試期間舊請求較晚完成時，結果一律丟棄，不得覆蓋較新的狀態（codex R6）。
+// status 為輔助資源：不阻塞查詢；回來後才更新過期警示與來源資訊（codex R7）。
 async function loadCore() {
+  const seq = ++state.coreSeq;
   state.core = 'loading';
   state.coreError = null;
+  state.status = null;
+  state.statusError = null;
   state.statusSettled = false;
+  renderBanners();            // 清掉舊的錯誤訊息與重試鈕，載入中不可重複觸發
+  renderSource();
   renderCoreState();
   route();                    // 載入中：詳細頁顯示「資料載入中」，不得顯示「查無」
 
   performance.mark('index-fetch-start');
-  const statusP = fetchJSON('data/status.json').then(
-    (s) => { state.status = s; state.statusError = null; },
-    (e) => { state.status = null; state.statusError = e; },
-  );
+  fetchJSON('data/status.json', TIMEOUT.status).then((s) => [s, null], (e) => [null, e]).then(([s, e]) => {
+    if (seq !== state.coreSeq) return;
+    state.status = s;
+    state.statusError = e;
+    state.statusSettled = true;
+    renderBanners();
+    renderSource();
+    if (state.current) renderDetail();          // 紅色警示須同步加註於現行價旁
+  });
+
+  let next;
   try {
-    const [meta, index] = await Promise.all([fetchJSON('data/meta.json'), fetchJSON('data/drug_index.json')]);
-    performance.mark('index-parsed');
+    const indexP = fetchJSON('data/drug_index.json', TIMEOUT.index).then((x) => {
+      if (seq === state.coreSeq) performance.mark('index-parsed');
+      return x;
+    });
+    const [meta, index] = await Promise.all([fetchJSON('data/meta.json', TIMEOUT.meta), indexP]);
     if (!E.validateMeta(meta).ok) throw new LoadError('invalid', 'meta.json 內容不合法');
     const vi = E.validateIndex(index, meta);
-    if (vi.reason === 'version_mismatch') {
-      state.core = 'mismatch';
-    } else if (!vi.ok) {
-      throw new LoadError('invalid', 'drug_index.json 內容不合法');
-    } else {
-      state.meta = meta;
-      state.prepared = E.prepareIndex(index.drugs);
-      state.byCode = new Map(index.drugs.map((d) => [d.code, d]));
-      state.shardCache.clear();
-      state.core = 'ready';
-      performance.mark('search-ready');
-      performance.measure('index-fetch-to-parsed', 'index-fetch-start', 'index-parsed');
-      performance.measure('parsed-to-searchable', 'index-parsed', 'search-ready');
+    if (vi.reason === 'version_mismatch') next = { core: 'mismatch' };
+    else if (!vi.ok) throw new LoadError('invalid', 'drug_index.json 內容不合法');
+    else {
+      next = {
+        core: 'ready', meta,
+        prepared: E.prepareIndex(index.drugs),
+        byCode: new Map(index.drugs.map((d) => [d.code, d])),
+      };
     }
   } catch (e) {
-    state.core = 'error';
-    state.coreError = e instanceof LoadError ? e : new LoadError('invalid', String(e));
+    next = { core: 'error', coreError: e instanceof LoadError ? e : new LoadError('invalid', String(e)) };
   }
-  await statusP;
-  state.statusSettled = true;
+  if (seq !== state.coreSeq) return;            // 已有較新的載入：丟棄本次結果
+
+  state.core = next.core;
+  state.coreError = next.coreError || null;
+  if (next.core === 'ready') {
+    state.meta = next.meta;
+    state.prepared = next.prepared;
+    state.byCode = next.byCode;
+    state.shardCache.clear();
+  }
   renderBanners();
   renderSource();
   renderCoreState();
+  if (state.core === 'ready') {
+    performance.mark('search-ready');           // 搜尋框已啟用、首次查詢已執行
+    performance.measure('index-fetch-to-parsed', 'index-fetch-start', 'index-parsed');
+    performance.measure('parsed-to-searchable', 'index-parsed', 'search-ready');
+  }
   route();
 }
 
@@ -144,7 +179,9 @@ function renderSource() {
   const m = state.meta;
   const rows = [];
   const result = { changed: '資料有更新', unchanged: '資料無變動' }[s?.lastCheckResult];
-  rows.push(['最後檢查', s ? `${twTime(s.lastCheckedAt)}${result ? `・${result}` : ''}` : '無法取得']);
+  const checked = !state.statusSettled ? '載入中…'
+    : s ? `${twTime(s.lastCheckedAt)}${result ? `・${result}` : ''}` : '無法取得';
+  rows.push(['最後檢查', checked]);
   rows.push(['本站資料產生時間', m ? `${twTime(m.generatedAt)}<br><small>已發布資料批次的產生時間，不代表官方內容異動時間；官方月更，落後一個月屬正常</small>` : '—']);
   rows.push(['data.gov.tw 資料集更新時間', s?.sourceModifiedAt ? esc(s.sourceModifiedAt) : '無法取得']);
   if (m) {
@@ -276,7 +313,7 @@ async function showDetail(code) {
   try {
     if (!prefix) throw new LoadError('invalid', '分片清單中找不到此代號');
     const t0 = performance.now();
-    shard = state.shardCache.get(prefix) ?? await fetchJSON(`data/history/${encodeURIComponent(prefix)}.json`);
+    shard = state.shardCache.get(prefix) ?? await fetchJSON(`data/history/${encodeURIComponent(prefix)}.json`, TIMEOUT.shard);
     performance.measure('shard-fetch-parse', { start: t0 });
   } catch (e) {
     if (seq !== state.detailSeq) return;
@@ -426,9 +463,7 @@ function measureChartWidth() {
   return Math.max(320, Math.min(900, Math.round(inner || 800)));
 }
 
-function stateText(r, prior) {
-  return r.priceState === 'priced' ? `${r.rawPrice} 元` : E.stateLabel(r, prior, 'cell');
-}
+const BAND_CLASS = { terminated: 'term', unpriced_zero: 'zero', suspended: 'susp', unknown: 'unknown' };
 
 function renderChart(recs, T) {
   const m = E.chartModel(recs, T);
@@ -440,10 +475,8 @@ function renderChart(recs, T) {
   const x = (d) => M.l + ((d - m.xMin) / (m.xMax - m.xMin)) * iw;
   const y = (v) => M.t + (1 - (v - m.yMin) / (m.yMax - m.yMin)) * ih;
   const f = (n) => n.toFixed(1);
-  const priors = new Map();
-  let last = null;
-  for (const r of recs) { priors.set(r, last); if (r.priceState === 'priced') last = r.price; }
-  const tip = (r) => `${r.from} ～ ${r.to ?? '無迄日'}：${stateText(r, priors.get(r))}${r.from > T ? '（預告）' : ''}`;
+  const priors = E.priorPrices(recs);
+  const tip = (r) => `${r.from} ～ ${r.to ?? '無迄日'}：${E.stateLabel(r, priors.get(r), 'cell')}${r.from > T ? '（預告）' : ''}`;
   const parts = [];
 
   parts.push(`<defs>
@@ -453,11 +486,13 @@ function renderChart(recs, T) {
       <rect width="7" height="7" fill="#F1F1F1"/><circle cx="3.5" cy="3.5" r="1.3" style="fill:var(--c-susp)"/></pattern>
     <pattern id="crossUnknown" width="8" height="8" patternUnits="userSpaceOnUse">
       <rect width="8" height="8" fill="#FFF8EC"/><path d="M0 0L8 8M8 0L0 8" style="stroke:var(--c-unknown)" stroke-width="1"/></pattern>
+    <pattern id="lineZero" width="10" height="6" patternUnits="userSpaceOnUse">
+      <rect width="10" height="6" fill="#F4F1EB"/><line x1="0" y1="3" x2="10" y2="3" style="stroke:var(--c-susp)" stroke-width="0.8"/></pattern>
   </defs>`);
 
-  // 區塊：終止／暫停／異常／空窗
+  // 區塊：終止／此前無有價的 0 元／暫停／異常／空窗
   for (const b of m.bands) {
-    parts.push(`<rect class="band-${b.kind === 'terminated' ? 'term' : b.kind === 'suspended' ? 'susp' : 'unknown'}${b.upcoming ? ' band-upcoming' : ''}"
+    parts.push(`<rect class="band-${BAND_CLASS[b.kind]}${b.upcoming ? ' band-upcoming' : ''}" data-band="${b.kind}"
       x="${f(x(b.x0))}" y="${M.t}" width="${f(Math.max(1, x(b.x1) - x(b.x0)))}" height="${ih}"><title>${esc(tip(b.record))}</title></rect>`);
   }
   for (const g of m.gaps) {
@@ -513,7 +548,7 @@ function renderChart(recs, T) {
 
   const desc = hasPrice
     ? `共 ${m.lines.length} 段有價區間、${m.bands.length} 段非有價區間、${m.gaps.length} 段空窗；逐筆數值見下方歷史表。`
-    : '此代號沒有有價紀錄，圖中只標示終止／暫停區間；逐筆數值見下方歷史表。';
+    : '此代號沒有有價紀錄，圖中只標示非有價區間；逐筆數值見下方歷史表。';
   const svg = `<div class="chart-wrap"><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="chartSvgTitle chartSvgDesc"
     data-lines="${m.lines.length}" data-bands="${m.bands.length}" data-gaps="${m.gaps.length}">
     <title id="chartSvgTitle">健保支付價走勢圖</title><desc id="chartSvgDesc">${esc(desc)}</desc>${parts.join('')}</svg></div>`;
@@ -523,22 +558,28 @@ function renderChart(recs, T) {
   else if (m.yMin > 0) notes.push('縱軸未由 0 起算，以便看出小幅調價；請以刻度數值判讀幅度。');
   if (m.skipped) notes.push(`${m.skipped} 筆起日異常遙遠的紀錄未繪製（見歷史表）。`);
 
-  return `${svg}${notes.map((n) => `<p class="axis-note">${esc(n)}</p>`).join('')}${LEGEND}
+  return `${svg}${notes.map((n) => `<p class="axis-note">${esc(n)}</p>`).join('')}${legend(m)}
     <label class="chart-opts"><input type="checkbox" data-action="cb-safe"${document.body.classList.contains('cb-safe') ? ' checked' : ''}> 色盲友善配色</label>`;
 }
 
 const sw = (inner) => `<svg width="26" height="12" viewBox="0 0 26 12" aria-hidden="true">${inner}</svg>`;
-const LEGEND = `<div class="legend">
-  <span>${sw('<line x1="1" x2="25" y1="6" y2="6" style="stroke:var(--c-line)" stroke-width="2.5"/>')}支付價</span>
-  <span>${sw('<line x1="1" x2="25" y1="6" y2="6" style="stroke:var(--c-upcoming)" stroke-width="2.5" stroke-dasharray="6 4"/>')}預告（尚未生效）</span>
-  <span>${sw('<path d="M13 1L18 10L8 10Z" style="fill:var(--c-term)"/>')}調升</span>
-  <span>${sw('<path d="M13 11L18 2L8 2Z" style="fill:var(--c-line)"/>')}調降</span>
-  <span>${sw('<path d="M13 0L19 6L13 12L7 6Z" style="fill:var(--c-unknown)"/>')}恢復支付</span>
-  <span>${sw('<rect width="26" height="12" fill="url(#hatchTerm)"/>')}終止支付</span>
-  <span>${sw('<rect width="26" height="12" fill="url(#dotsSusp)"/>')}暫停支付</span>
-  <span>${sw('<rect width="26" height="12" fill="url(#crossUnknown)"/>')}來源資料異常</span>
-  <span>${sw('<rect width="26" height="12" fill="#F3EFE8" stroke="#CFC6B8"/>')}空窗（無紀錄）</span>
-</div>`;
+// 圖例只列本圖實際出現的區塊類型（「此前無有價的 0 元」與「終止支付」分開，§5.3）
+function legend(m) {
+  const kinds = new Set(m.bands.map((b) => b.kind));
+  const items = [
+    `<span>${sw('<line x1="1" x2="25" y1="6" y2="6" style="stroke:var(--c-line)" stroke-width="2.5"/>')}支付價</span>`,
+    `<span>${sw('<line x1="1" x2="25" y1="6" y2="6" style="stroke:var(--c-upcoming)" stroke-width="2.5" stroke-dasharray="6 4"/>')}預告（尚未生效）</span>`,
+    `<span>${sw('<path d="M13 1L18 10L8 10Z" style="fill:var(--c-term)"/>')}調升</span>`,
+    `<span>${sw('<path d="M13 11L18 2L8 2Z" style="fill:var(--c-line)"/>')}調降</span>`,
+    `<span>${sw('<path d="M13 0L19 6L13 12L7 6Z" style="fill:var(--c-unknown)"/>')}恢復支付</span>`,
+  ];
+  if (kinds.has('terminated')) items.push(`<span data-legend="terminated">${sw('<rect width="26" height="12" fill="url(#hatchTerm)"/>')}終止支付</span>`);
+  if (kinds.has('unpriced_zero')) items.push(`<span data-legend="unpriced_zero">${sw('<rect width="26" height="12" fill="url(#lineZero)"/>')}健保支付價 0 元（此前無有價紀錄）</span>`);
+  if (kinds.has('suspended')) items.push(`<span data-legend="suspended">${sw('<rect width="26" height="12" fill="url(#dotsSusp)"/>')}暫停支付</span>`);
+  if (kinds.has('unknown')) items.push(`<span data-legend="unknown">${sw('<rect width="26" height="12" fill="url(#crossUnknown)"/>')}來源資料異常</span>`);
+  if (m.gaps.length) items.push(`<span data-legend="gap">${sw('<rect width="26" height="12" fill="#F3EFE8" stroke="#CFC6B8"/>')}空窗（無紀錄）</span>`);
+  return `<div class="legend">${items.join('')}</div>`;
+}
 
 // ── 歷史表（spec §8.3、E3）──────────────────────────────────────
 const EVENT_TEXT = {
@@ -549,19 +590,25 @@ const EVENT_TEXT = {
 const INVALID_TEXT = { blank_start: '起日空白', invalid_date: '日期無法解析', inverted_interval: '起日晚於迄日' };
 const CHANGE_TYPES = new Set(['increase', 'decrease', 'relisted']);
 
+function eventText(r, prior) {
+  if (r.eventType === 'unchanged' && r.priceState !== 'priced') return '同狀態續期';
+  // 此前從未有價的 0 元：事件欄不得稱「終止」（§5.3，codex R3）
+  if (r.eventType === 'terminated' && E.isUnpricedZero(r, prior)) return '0 元（此前無有價紀錄）';
+  return EVENT_TEXT[r.eventType] || r.eventType;
+}
+
 function renderTable(entry, T) {
-  const priors = [];
-  let last = null;
-  for (const r of entry.records) { priors.push(last); if (r.priceState === 'priced') last = r.price; }
-  const rows = entry.records.map((r, i) => {
+  const priors = E.priorPrices(entry.records);
+  const rows = entry.records.map((r) => {
+    const prior = priors.get(r);
     const upcoming = r.from > T;
     const current = E.isEffective(r, T);
     const to = r.to ?? (upcoming ? '—（預告，無迄日）' : '—（持續有效）');
-    const event = r.eventType === 'unchanged' && r.priceState !== 'priced' ? '同狀態續期' : EVENT_TEXT[r.eventType];
+    const stop = (r.priceState === 'terminated' && !E.isUnpricedZero(r, prior)) || r.priceState === 'suspended';
     const tags = [
       current ? '<span class="tag now">現行</span>' : '',
       upcoming ? '<span class="tag info">預告</span>' : '',
-      `<span class="tag${r.priceState === 'terminated' || r.priceState === 'suspended' ? ' stop' : ''}">${esc(event || r.eventType)}</span>`,
+      `<span class="tag${stop ? ' stop' : ''}">${esc(eventText(r, prior))}</span>`,
       r.flags.includes('gap_before') ? '<span class="tag warn">前有空窗</span>' : '',
       r.flags.includes('conflicting_price_interval') ? '<span class="tag warn">來源紀錄衝突</span>' : '',
       r.flags.includes('overlap') ? '<span class="tag warn">重疊</span>' : '',
@@ -569,7 +616,7 @@ function renderTable(entry, T) {
     const change = CHANGE_TYPES.has(r.eventType);
     const price = r.priceState === 'priced'
       ? `<span class="mono">${esc(r.rawPrice)}</span>`
-      : esc(E.stateLabel(r, priors[i], 'cell'));
+      : esc(E.stateLabel(r, prior, 'cell'));
     return `<tr class="${current ? 'is-current' : ''}${upcoming ? ' is-upcoming' : ''}" data-kind="record">
       <td class="date">${esc(r.from)}</td><td class="date">${esc(to)}</td>
       <td class="num${r.priceState === 'priced' ? '' : ' label'}" title="原始值：${esc(r.rawPrice)}">${price}</td>

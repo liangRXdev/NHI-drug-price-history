@@ -245,3 +245,4 @@
 | v2 | 新增 E 類驗收 | 3.25 |
 | v2.1 | D10 改為每片 `shardVersion`＋meta 對照表（原設計與 B5 衝突，Phase 1 實作時發現）；分片改前 4 碼（2 碼時 A0 gzip 3.35 MB 超過 warning） | 實作回饋 |
 | v2.2 | D12 改手刻 SVG、C2 改斷言區段模型（使用者 2026-09-12 選定）；新增 D13 前端測試工具；index window 加 `pricedBefore`（「終止→終止續期」previousPrice 為 null，搜尋卡拿不到終止前價格，實測 45 代號） | Phase 2 實作回饋 |
+| v2.3 | 依 `/codex-review`（`.ai-review/verdict.md`）：搜尋卡 T 當日多筆有效→衝突、缺 `pricedBefore`→需更新；首列 0 元例外擴及圖表區塊／圖例／事件欄／聲明，spec §5.5 null 終止文案改正；`metaVariants` 加 `recordIndex`；SW 只清本專案快取 | codex R1–R4、R9 |

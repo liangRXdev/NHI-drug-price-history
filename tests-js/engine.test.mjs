@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  chartModel, currentLabel, dayNumber, decimalChange, latestEventLabel, MAX_RESULTS, prepareIndex,
-  search, searchCard, selectMeta, shardPrefix, staleness, stateLabel, summaryAt, totalChangeLabel,
+  chartModel, currentLabel, dayNumber, decimalChange, isEffective, latestEventLabel, MAX_RESULTS, prepareIndex,
+  priorPrices, search, searchCard, selectMeta, shardPrefix, staleness, stateLabel, summaryAt, totalChangeLabel,
   upcomingLabel, validateIndex, validateMeta, validateShard,
 } from '../engine.js';
 
@@ -22,6 +22,18 @@ function rec(from, to, rawPrice, eventType, extra = {}) {
   };
 }
 const win = (r, pricedBefore, flags = r.flags) => ({ ...r, pricedBefore, flags });
+
+// 依 spec §5.1（lib/history.py build_window）由完整 history 組 build 日 D 的 window，
+// 讓搜尋卡與詳細頁吃同一份 history，測試「build 後日期移動」的情境。
+function windowAt(records, D) {
+  const priors = priorPrices(records);
+  const current = records.filter((r) => isEffective(r, D));
+  const upcoming = records.find((r) => r.from > D);
+  const w = [];
+  if (current.length) w.push({ ...current[0], pricedBefore: priors.get(current[0]), flags: current.length > 1 ? [...current[0].flags, 'conflict'] : current[0].flags });
+  if (upcoming) w.push({ ...upcoming, pricedBefore: priors.get(upcoming) });
+  return { window: w };
+}
 
 // ── C1 現行價判定（合成案例）─────────────────────────────────────
 test('C1 priced 10 → 預告 priced 8：前一天顯示 10 與調整標籤', () => {
@@ -104,6 +116,114 @@ test('§5.3 首列 0 元：預告終止若此前從未有價，不得出現「�
   assert.equal(stateLabel(rec('2020-01-01', null, '0.00', 'terminated'), 5, 'cell'), '健保支付價 0 元（已終止支付）');
 });
 
+// ── C1 三日 × 搜尋卡／詳細頁矩陣（window 由 history 以 build 日組成）──────
+const DAYS = ['2026-09-30', '2026-10-01', '2026-10-02'];
+const BUILD = '2026-09-11';
+
+function matrix(records, expectCard, expectDetail) {
+  const w = windowAt(records, BUILD);
+  DAYS.forEach((T, i) => {
+    const card = searchCard(w, T);
+    const s = summaryAt(records, T);
+    assert.equal(card.text, expectCard[i], `搜尋卡 @${T}`);
+    assert.equal(currentLabel(s), expectDetail[i], `詳細頁 @${T}`);
+  });
+}
+
+test('C1 矩陣：終止（終止前 10）→ 預告恢復支付 20', () => {
+  matrix([
+    rec('2020-01-01', '2024-12-31', '10.00', 'initial'),
+    rec('2025-01-01', '2026-09-30', '0.00', 'terminated', { previousPrice: 10 }),
+    rec('2026-10-01', null, '20.00', 'relisted', { previousPrice: 10, percentChange: 100, crossesStop: true }),
+  ],
+  ['已終止支付（終止前 10.00 元）', '20.00 元', '20.00 元'],
+  ['已終止支付（終止前 10.00 元）', '20.00 元', '20.00 元']);
+});
+
+test('C1 矩陣：暫停 → 預告有價', () => {
+  matrix([
+    rec('2020-01-01', '2024-12-31', '10.00', 'initial'),
+    rec('2025-01-01', '2026-09-30', '-', 'suspended', { previousPrice: 10 }),
+    rec('2026-10-01', null, '9.00', 'relisted', { previousPrice: 10, percentChange: -10, crossesStop: true }),
+  ],
+  ['暫停支付（來源標示 -），暫停前 10.00 元', '9.00 元', '9.00 元'],
+  ['暫停支付（來源標示 -），暫停前 10.00 元', '9.00 元', '9.00 元']);
+});
+
+test('C1 矩陣：預告前一天起為空窗', () => {
+  matrix([
+    rec('2020-01-01', '2026-09-29', '10.00', 'initial'),
+    rec('2026-10-02', null, '9.00', 'decrease', { previousPrice: 10, percentChange: -10, flags: ['gap_before'] }),
+  ],
+  ['此日期無支付紀錄（空窗）', '此日期無支付紀錄（空窗）', '9.00 元'],
+  ['此日期無支付紀錄（空窗）', '此日期無支付紀錄（空窗）', '9.00 元']);
+});
+
+// ── codex R2：build 時單筆、T 跨入重疊 ──────────────────────────────
+test('R2 build 後預告生效又與無迄日現行重疊：搜尋卡不得報單一價格，與詳細頁一致', () => {
+  const recs = [
+    rec('2020-01-01', null, '10.00', 'initial'),
+    rec('2026-10-01', null, '0.00', 'unknown', { flags: ['overlap'] }),
+  ];
+  const w = windowAt(recs, BUILD);
+  assert.equal(searchCard(w, '2026-09-30').rawPrice, '10.00');         // 生效前：單一現行
+  for (const T of ['2026-10-01', '2026-10-02']) {
+    const card = searchCard(w, T);
+    assert.equal(card.kind, 'conflict', T);
+    assert.equal(card.rawPrice, null, T);
+    assert.equal(card.text, '來源紀錄衝突，無法判定單一支付價', T);
+    assert.equal(summaryAt(recs, T).status, 'conflict', T);
+  }
+});
+
+test('R2 兩筆 window 同日有效、皆無 flag（僅靠有效筆數判定）→ 衝突', () => {
+  const w = { window: [
+    win(rec('2020-01-01', null, '10.00', 'initial'), null, []),
+    win(rec('2026-10-01', null, '8.00', 'decrease'), 10, []),
+  ] };
+  assert.equal(searchCard(w, '2026-09-30').rawPrice, '10.00');
+  const c = searchCard(w, '2026-10-01');
+  assert.equal(c.kind, 'conflict');
+  assert.equal(c.text, '來源紀錄衝突，無法判定單一支付價');
+  assert.equal(c.rawPrice, null);
+});
+
+test('R2 單筆有效但帶 overlap／conflicting_price_interval → 不給確定價格', () => {
+  const a = rec('2026-01-01', null, '10.00', 'unknown');
+  const o = searchCard({ window: [win({ ...a, flags: ['overlap'] }, null)] }, '2026-09-11');
+  assert.equal(o.kind, 'conflict');
+  assert.equal(o.text, '來源紀錄區間重疊，請開啟詳細頁確認');
+  assert.equal(o.rawPrice, null);
+  const c = searchCard({ window: [win({ ...a, flags: ['conflicting_price_interval'] }, null)] }, '2026-09-11');
+  assert.equal(c.text, '來源紀錄衝突，無法判定單一支付價');
+});
+
+// ── codex R1：舊版 index 缺 pricedBefore ──────────────────────────
+test('R1 非有價 window 列缺 pricedBefore → 需更新，不得顯示「— 元」或「終止」', () => {
+  const stop = rec('2020-01-01', null, '0.00', 'unchanged');
+  const card = searchCard({ window: [{ ...stop }] }, '2026-09-11');     // 無 pricedBefore 欄位
+  assert.equal(card.kind, 'exhausted');
+  assert.equal(card.text, '需更新，請開啟詳細頁');
+  assert.ok(!card.text.includes('—'));
+  // 有價列缺欄位不影響（價格本身不需要 pricedBefore）
+  assert.equal(searchCard({ window: [{ ...rec('2020-01-01', null, '5.00', 'initial') }] }, '2026-09-11').rawPrice, '5.00');
+});
+
+// ── codex R3：首列 0 元例外擴及事件與圖表 ───────────────────────────
+test('R3 暫停 → 0 元、此前從未有價：最新事件與圖表區塊皆不稱「終止」', () => {
+  const recs = [
+    rec('1995-03-01', '1996-12-31', '-', 'initial'),
+    rec('1997-01-01', null, '0.00', 'terminated'),                     // previousPrice null：從未有價
+  ];
+  const s = summaryAt(recs, '2026-01-01');
+  assert.equal(latestEventLabel(s.latestEvent), '健保支付價 0 元（此前無有價紀錄，1997-01-01 起）');
+  assert.equal(currentLabel(s), '健保支付價 0 元（此前無有價紀錄）');
+  assert.deepEqual(chartModel(recs, '2026-01-01').bands.map((b) => b.kind), ['suspended', 'unpriced_zero']);
+  // 曾有價後的 0 元仍為一般終止區塊
+  const later = [rec('1995-03-01', '1996-12-31', '5.00', 'initial'), rec('1997-01-01', null, '0.00', 'terminated', { previousPrice: 5 })];
+  assert.deepEqual(chartModel(later, '2026-01-01').bands.map((b) => b.kind), ['terminated']);
+});
+
 // ── E1 總變化、E2 最新事件 ───────────────────────────────────────
 test('E1 總變化以參考日前最後一筆有價為準，不用預告價', () => {
   const recs = [
@@ -150,6 +270,17 @@ test('十進位差額：half away from zero、不受浮點誤差影響', () => {
   assert.deepEqual(decimalChange('0.30', '0.10'), { absoluteChange: '-0.20', percentChange: '-66.67' });
   assert.deepEqual(decimalChange('8', '9.001'), { absoluteChange: '1.00', percentChange: '12.51' });
   assert.equal(decimalChange('0.00', '1.00'), null);
+});
+
+test('R5 十進位語法與 Python Decimal 一致；任一值非正數 → null；失敗時明示', () => {
+  assert.deepEqual(decimalChange('1e1', '2e1'), { absoluteChange: '10.00', percentChange: '100.00' });
+  assert.deepEqual(decimalChange('.5', '1.'), { absoluteChange: '0.50', percentChange: '100.00' });
+  assert.deepEqual(decimalChange('2.5E-1', '0.5'), { absoluteChange: '0.25', percentChange: '100.00' });
+  assert.equal(decimalChange('10', '0'), null);
+  assert.equal(decimalChange('.', '1'), null);
+  const s = summaryAt([rec('2020-01-01', '2020-12-31', '10.00', 'initial'),
+    { ...rec('2021-01-01', null, '12.00', 'increase'), rawPrice: '1_2' }], '2026-01-01');
+  assert.match(totalChangeLabel(s), /差額無法計算/);
 });
 
 // ── C2 圖表區段模型 ─────────────────────────────────────────────
@@ -311,4 +442,22 @@ test('§6.6 metaVariants 依日期選用，不以預告列回填', () => {
   assert.equal(selectMeta(entry, '2026-09-11').chName, '現行名');
   assert.equal(selectMeta(entry, '2026-10-01').chName, '預告名');
   assert.equal(selectMeta({ meta: { chName: 'x' }, records: [rec('2027-01-01', null, '1.00', 'initial')] }, '2026-09-11'), null);
+});
+
+test('R4 同起日、不同描述：依 recordIndex 對應選中的那一列（與 Python select_meta_row 一致）', () => {
+  const entry = {
+    metaVariants: [
+      { from: '2020-01-01', recordIndex: 0, chName: '甲名' },
+      { from: '2020-01-01', recordIndex: 1, chName: '乙名' },
+      { from: '2022-01-01', recordIndex: 2, chName: '甲名' },
+    ],
+    records: [
+      rec('2020-01-01', '2020-12-31', '10.00', 'initial'),
+      rec('2020-01-01', '2021-12-31', '10.00', 'unchanged', { flags: ['overlap'] }),
+      rec('2022-01-01', null, '10.00', 'unchanged'),
+    ],
+  };
+  assert.equal(selectMeta(entry, '2020-06-01').chName, '甲名');      // 第一筆有效列＝record 0
+  assert.equal(selectMeta(entry, '2021-06-01').chName, '乙名');      // 只剩 record 1 有效
+  assert.equal(selectMeta(entry, '2023-01-01').chName, '甲名');
 });

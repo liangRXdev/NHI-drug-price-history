@@ -49,7 +49,8 @@ const json = (route, body, delay = 0) => new Promise((ok) => setTimeout(ok, dela
  * 攔截 data/ 請求。opts：
  *   today        固定瀏覽器日期（YYYY-MM-DD，台北 10:00）
  *   data         buildData() 結果（可先改寫）
- *   status       status 物件｜'404'｜'corrupt'
+ *   status       status 物件｜'404'｜'corrupt'｜'pending'（永不回應）
+ *   timeouts     覆寫 app 的 fetch 逾時（window.NHI_FETCH_TIMEOUTS）
  *   index/meta   '404'｜'corrupt'｜物件覆寫
  *   indexDelay   index 延遲毫秒
  *   shard        (prefix, attempt, route, data) => 自訂處理；回傳 false 走預設
@@ -57,6 +58,7 @@ const json = (route, body, delay = 0) => new Promise((ok) => setTimeout(ok, dela
 export async function mockSite(page, opts = {}) {
   const today = opts.today || '2026-09-11';
   await page.clock.setFixedTime(new Date(`${today}T10:00:00+08:00`));
+  if (opts.timeouts) await page.addInitScript((t) => { window.NHI_FETCH_TIMEOUTS = t; }, opts.timeouts);
   const data = opts.data || buildData();
   const status = opts.status ?? statusDaysAgo(today, 1);
   const attempts = {};
@@ -67,7 +69,10 @@ export async function mockSite(page, opts = {}) {
     calls.push(path);
     const special = (v) => (v === '404' ? route.fulfill({ status: 404, body: 'not found' })
       : v === 'corrupt' ? json(route, '{"broken": ') : null);
-    if (path === 'status.json') return special(status) ?? json(route, status);
+    if (path === 'status.json') {
+      if (status === 'pending') return new Promise(() => {});        // 永不回應：模擬連線卡住
+      return special(status) ?? json(route, status);
+    }
     if (path === 'meta.json') return special(opts.meta) ?? json(route, typeof opts.meta === 'object' ? opts.meta : data.meta);
     if (path === 'drug_index.json') {
       return special(opts.index) ?? json(route, typeof opts.index === 'object' ? opts.index : data.index, opts.indexDelay || 0);

@@ -278,7 +278,9 @@ CSV 共 20 欄。至少保留：
 | 情況 | 搜尋卡顯示 |
 |---|---|
 | T 落在某筆 window 區間內 | 該筆的價格或狀態標籤；若其後還有 window 區間 → 附預告標籤 |
-| 該筆帶 `conflict` flag | 「來源紀錄衝突，無法判定單一支付價」 |
+| T 當日有兩筆以上 window 區間有效（build 後預告生效又與現行重疊），或該筆帶 `conflict`／`conflicting_price_interval` flag | 「來源紀錄衝突，無法判定單一支付價」 |
+| 該筆只帶 `overlap` flag（重疊對象可能不在 window 內） | 「來源紀錄區間重疊，請開啟詳細頁確認」，不顯示確定價格 |
+| window 中非有價列缺 `pricedBefore`（舊版 index） | 「需更新，請開啟詳細頁」，不顯示確定價格 |
 | T 早於 window 第一筆的 `from` | 「尚未生效；YYYY-MM-DD 起 …」（D 無有效區間時）或「此日期無支付紀錄」 |
 | T 晚於 window 最後一筆的非 null `to`（**window 耗盡**） | 「需更新，請開啟詳細頁」，**不得顯示任何確定價格** |
 | `window` 為空 | 「目前無有效支付紀錄」 |
@@ -305,7 +307,7 @@ build 日後、下次 build 前跨過預告生效日時，搜尋卡的 `priceCha
 }
 ```
 
-- `meta`：同代號所有列的描述欄位一致時使用。**不一致時**改為 `metaVariants: [{ "from": "<該變體首次出現之 record from>", …同 meta 欄位 }]`（依 from 排序），由前端依 §6.6 規則以瀏覽器日期選用；shard 因此不依賴 build 日。
+- `meta`：同代號所有列的描述欄位一致時使用。**不一致時**改為 `metaVariants: [{ "from": "<該變體首次出現之 record from>", "recordIndex": <該 record 在 records 中的索引>, …同 meta 欄位 }]`（依 records 順序），由前端依 §6.6 規則以瀏覽器日期選出 record，再取 `recordIndex` ≤ 該 record 索引的最後一個變體；shard 因此不依賴 build 日。只比 `from` 在「同起日、不同描述」時會選錯列（2026-09-12 codex R4）。
 - `invalidRecords`：無法形成有效 interval 的來源列（§6.1），保留原值：`{ "rawFrom", "rawTo", "rawPrice", "error": "blank_start|invalid_date|inverted_interval" }`；不參與排序、事件、coverage 與圖表，但必須出現在詳細頁歷史表並標「日期異常」。
 - `shardVersion`：本片 `drugs` 內容 canonical 序列化之 sha256。每片**只帶自己的 hash**，不帶全域版本，否則改一個價格就會改寫全部 shard（違反 plan.md B5）。
 - `dataVersion`：`meta.shards.versions`（各片 hash 對照表）的 sha256；寫入 `meta.json`、`drug_index.json`、`status.json`。只依來源內容，不依 build 日。
@@ -367,7 +369,7 @@ build 日後、下次 build 前跨過預告生效日時，搜尋卡的 `priceCha
 
 `suspended` 語意為臨床藥師判斷而非官方文件定義，故 UI 必須併列原始標記，讓使用者可自行查核。
 
-**首列 0 元例外**（2026-09-11 定案）：`terminated` 區間若**之前從未有 `priced` 紀錄**（實測 3,387 個代號首列即 0 元，例 `A020296321`），`priceState` 仍為 `terminated`，但 UI 標籤改為「**健保支付價 0 元（此前無有價紀錄）**」，不得出現「終止」字樣。理由：只陳述資料可見的事實，不推論是終止或尚未核價。此規則適用於歷史表、圖表區塊、搜尋卡與摘要卡。
+**首列 0 元例外**（2026-09-11 定案）：`terminated` 區間若**之前從未有 `priced` 紀錄**（實測 3,387 個代號首列即 0 元，例 `A020296321`），`priceState` 仍為 `terminated`，但 UI 標籤改為「**健保支付價 0 元（此前無有價紀錄）**」，不得出現「終止」字樣。理由：只陳述資料可見的事實，不推論是終止或尚未核價。此規則適用於歷史表（支付價欄與事件欄）、圖表區塊與圖例（獨立區塊樣式）、搜尋卡、摘要卡、預告標籤與頁尾聲明。
 
 ### 5.4 Derived event
 
@@ -403,7 +405,7 @@ build 日後、下次 build 前跨過預告生效日時，搜尋卡的 `priceCha
 - **歷史調價次數**：已生效紀錄中 `increase`／`decrease` 的個數。
 - **最新一次調整**：已生效紀錄中，最後一筆 `eventType ≠ unchanged` 者：
   - `increase`／`decrease`／`relisted` → 差額與 %（`relisted` 加註「跨越停止期間」）
-  - `terminated` →「已終止支付（終止前 X 元，YYYY-MM-DD 起）」，X＝**該事件的 `previousPrice`**；null 時為「已終止支付（無先前有價紀錄）」
+  - `terminated` →「已終止支付（終止前 X 元，YYYY-MM-DD 起）」，X＝**該事件的 `previousPrice`**；null（此前從未有價）時依 §5.3 首列 0 元例外為「健保支付價 0 元（此前無有價紀錄，YYYY-MM-DD 起）」，不得含「終止」（原文「已終止支付（無先前有價紀錄）」與 §5.3 衝突，2026-09-12 修正）
   - `suspended` →「暫停支付（暫停前 X 元，YYYY-MM-DD 起）」，規則同上
   - `unknown` →「最近一次變動無法判定（來源資料異常）」
   - 只有 `initial`／`first_priced` →「無調價紀錄」

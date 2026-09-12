@@ -42,13 +42,17 @@ export function isEffective(r, day) {
 }
 
 // ── 十進位金額（避免浮點誤差；規則同 Python ROUND_HALF_UP：half away from zero）──
-const DECIMAL = /^\+?(\d+)(?:\.(\d+))?$/;
+// 接受 Python Decimal 對一般數字的寫法：12.50、.5、10.、1e1、2.5E-1（ETL 以 Decimal 判定 priced）
+const DECIMAL = /^\+?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/;
 
 function parseDecimal(raw) {
   const m = DECIMAL.exec(String(raw).trim());
-  if (!m) return null;
+  if (!m || (m[1] + (m[2] || '')) === '') return null;
   const frac = m[2] || '';
-  return { int: BigInt(m[1] + frac), scale: frac.length };
+  let int = BigInt(m[1] + frac || '0');
+  let scale = frac.length - Number(m[3] || 0);
+  if (scale < 0) { int *= 10n ** BigInt(-scale); scale = 0; }
+  return { int, scale };
 }
 
 function align(a, b) {
@@ -71,11 +75,11 @@ function centsToString(c) {
   return `${neg ? '-' : ''}${a / 100n}.${String(a % 100n).padStart(2, '0')}`;
 }
 
-/** 以 rawPrice 十進位值計算差額與百分比，回傳 2 位小數字串；無法解析回傳 null。 */
+/** 以 rawPrice 十進位值計算差額與百分比，回傳 2 位小數字串；無法解析或任一值不為正數回傳 null。 */
 export function decimalChange(prevRaw, newRaw) {
   const p = parseDecimal(prevRaw);
   const n = parseDecimal(newRaw);
-  if (!p || !n || p.int === 0n) return null;
+  if (!p || !n || p.int <= 0n || n.int <= 0n) return null;
   const [pi, ni, scale] = align(p, n);
   const diff = ni - pi;
   const unit = 10n ** BigInt(scale);
@@ -129,14 +133,29 @@ export function summaryAt(records, ref) {
   };
 }
 
-/** target 之前最後一個 priced 金額（與 index window 的 pricedBefore 同義）。 */
-export function pricedBefore(records, target) {
+/**
+ * 每筆 record → 其之前最後一個 priced 金額（null＝此前從未有價）；一次掃描。
+ * 與 index window 的 pricedBefore 同義；摘要、圖表、歷史表共用，避免各處各算一次而漂移。
+ */
+export function priorPrices(records) {
+  const out = new Map();
   let last = null;
   for (const r of records) {
-    if (r === target) return last;
+    out.set(r, last);
     if (r.priceState === 'priced') last = r.price;
   }
-  return null;
+  return out;
+}
+
+/** target 之前最後一個 priced 金額。 */
+export function pricedBefore(records, target) {
+  const v = priorPrices(records).get(target);
+  return v === undefined ? null : v;
+}
+
+/** 此前從未有價的 0 元列（spec §5.3 首列 0 元例外）：不得稱「終止」。 */
+export function isUnpricedZero(r, prior) {
+  return r.priceState === 'terminated' && prior === null;
 }
 
 // ── 描述欄位（spec §6.6）─────────────────────────────────────────
@@ -153,10 +172,14 @@ export function selectMeta(entry, day) {
   }
   if (!row) return recs.length === 0 && entry.meta ? entry.meta : null;
   if (entry.meta) return entry.meta;
-  // metaVariants：from 為該變體首次出現之 record 的 from；取 from ≤ 選定列 from 的最後一個
+  // metaVariants：recordIndex＝該變體首次出現之 record 索引；取 recordIndex ≤ 選定列索引的最後一個。
+  // 只比 from 在「同起日、不同描述」時會選錯列（codex R4），僅在缺 recordIndex 的舊資料退回比 from。
   const variants = entry.metaVariants || [];
+  const k = recs.indexOf(row);
   let chosen = null;
-  for (const v of variants) if (v.from <= row.from) chosen = v;
+  for (const v of variants) {
+    if (Number.isInteger(v.recordIndex) ? v.recordIndex <= k : v.from <= row.from) chosen = v;
+  }
   return chosen;
 }
 
@@ -255,9 +278,9 @@ export function latestEventLabel(e) {
     case 'relisted':
       return `${e.from} 恢復支付 ${e.rawPrice} 元（停止前 ${fmtMoney(e.previousPrice)} 元，`
         + `${fmtPct(e.percentChange)}，跨越停止期間）`;
-    case 'terminated':
+    case 'terminated':        // previousPrice 為 null ⇔ 此前從未有價：首列 0 元例外，不得稱「終止」（§5.3）
       return e.previousPrice === null
-        ? `已終止支付（無先前有價紀錄，${e.from} 起）`
+        ? `健保支付價 0 元（此前無有價紀錄，${e.from} 起）`
         : `已終止支付（終止前 ${fmtMoney(e.previousPrice)} 元，${e.from} 起）`;
     case 'suspended':
       return e.previousPrice === null
@@ -277,7 +300,7 @@ export function totalChangeLabel(s) {
   if (s.status === 'terminated') suffix = '，至終止前';
   else if (s.status === 'suspended') suffix = '，至暫停前';
   const change = t.absoluteChange === undefined
-    ? ''
+    ? `（差額無法計算：原始金額格式特殊${suffix}）`
     : `（${fmtSigned(t.absoluteChange)} 元，${fmtPct(t.percentChange)}${suffix}）`;
   return `${t.first.rawPrice} → ${t.last.rawPrice} 元${change}`;
 }
@@ -286,12 +309,17 @@ export function totalChangeLabel(s) {
 /**
  * → { kind, text, upcoming, rawPrice }
  * kind：priced／stopped／conflict／none／not_yet／gap／exhausted
- * exhausted（window 耗盡）時不得給出任何確定價格。
+ * exhausted（window 耗盡或資料格式過舊）時不得給出任何確定價格。
  */
+const NEEDS_UPDATE = { kind: 'exhausted', text: '需更新，請開啟詳細頁', upcoming: null, rawPrice: null };
+
 export function searchCard(drug, T) {
   const w = drug.window || [];
   if (w.length === 0) return { kind: 'none', text: '目前無有效支付紀錄', upcoming: null, rawPrice: null };
+  // 舊版 index 缺 pricedBefore：停止狀態的「終止前 X 元」與首列 0 元例外都無法判定，保守要求開詳細頁（codex R1）
+  if (w.some((r) => r.pricedBefore === undefined && r.priceState !== 'priced')) return NEEDS_UPDATE;
 
+  const effective = w.filter((r) => isEffective(r, T));
   const i = w.findIndex((r) => isEffective(r, T));
   const upcomingOf = (j) => {
     const u = w.slice(j).find((r) => r.from > T);
@@ -300,8 +328,14 @@ export function searchCard(drug, T) {
 
   if (i >= 0) {
     const r = w[i];
-    if (r.flags.includes('conflict')) {
-      return { kind: 'conflict', text: '來源紀錄衝突，無法判定單一支付價', upcoming: upcomingOf(i + 1), rawPrice: null };
+    // T 當日多筆有效（build 後預告生效又與現行重疊）或來源標示衝突／重疊 → 不給單一價格（codex R2）
+    const flagged = (f) => effective.some((x) => x.flags.includes(f));
+    if (effective.length > 1 || flagged('conflict') || flagged('conflicting_price_interval') || flagged('overlap')) {
+      const later = w.findIndex((x) => x.from > T);
+      // 單筆帶 overlap：重疊對象可能不在 window 內，搜尋卡無從判定 → 要求開詳細頁，不稱「衝突」
+      const text = effective.length === 1 && !flagged('conflict') && !flagged('conflicting_price_interval')
+        ? '來源紀錄區間重疊，請開啟詳細頁確認' : '來源紀錄衝突，無法判定單一支付價';
+      return { kind: 'conflict', text, upcoming: later >= 0 ? upcomingOf(later) : null, rawPrice: null };
     }
     return {
       kind: r.priceState === 'priced' ? 'priced' : 'stopped',
@@ -321,7 +355,7 @@ export function searchCard(drug, T) {
   if (later >= 0) {
     return { kind: 'gap', text: '此日期無支付紀錄（空窗）', upcoming: upcomingOf(later), rawPrice: null };
   }
-  return { kind: 'exhausted', text: '需更新，請開啟詳細頁', upcoming: null, rawPrice: null };
+  return NEEDS_UPDATE;
 }
 
 // ── 搜尋（spec §8.1）────────────────────────────────────────────
@@ -458,6 +492,7 @@ export function chartModel(records, today) {
   const gaps = [];
   let maxEnd = null;       // 累計最大迄日（day number，含當日）；Infinity＝已有無迄日區間
   let prevLine = null;     // 上一筆 record 若為 priced，其線段
+  const priors = priorPrices(records);
 
   for (const r of recs) {
     const x0 = dayNumber(r.from);
@@ -480,7 +515,9 @@ export function chartModel(records, today) {
       }
       prevLine = seg;
     } else {
-      const kind = r.priceState === 'terminated' || r.priceState === 'suspended' ? r.priceState : 'unknown';
+      // 此前從未有價的 0 元另成一類：圖例不得稱「終止」（§5.3，codex R3）
+      const kind = isUnpricedZero(r, priors.get(r)) ? 'unpriced_zero'
+        : r.priceState === 'terminated' || r.priceState === 'suspended' ? r.priceState : 'unknown';
       bands.push({ x0, x1, kind, upcoming, record: r });
       prevLine = null;
     }

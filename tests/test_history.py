@@ -268,6 +268,20 @@ def test_index_metadata_comes_from_current_row_not_upcoming():
     assert "inconsistent_metadata" in flags
 
 
+def test_meta_variants_carry_record_index_for_same_start_rows():
+    # 同起日、不同描述：只記 from 無法對應回 select_meta_row 選中的列（codex R4）
+    rows = [make_row(frm="1090101", to="1091231", chName="甲名"),
+            make_row(frm="1090101", to="1101231", chName="乙名"),
+            make_row(frm="1110101", to="9991231", chName="甲名")]
+    by_code, _ = normalize_rows(rows)
+    shard_entry, _, _ = build_code(CODE, by_code[CODE], D)
+    variants = shard_entry["metaVariants"]
+    assert [(v["recordIndex"], v["from"], v["chName"]) for v in variants] == [
+        (0, "2020-01-01", "甲名"), (1, "2020-01-01", "乙名"), (2, "2022-01-01", "甲名")]
+    recs = by_code[CODE]["records"]
+    assert select_meta_row(recs, date(2020, 6, 1))["chName"] == "甲名"   # 前端須依 recordIndex 對應到同一列
+
+
 def test_metadata_fallbacks():
     past = [make_row(frm="1090101", to="1091231", chName="舊名"),
             make_row(frm="1100101", to="1101231", chName="新名")]

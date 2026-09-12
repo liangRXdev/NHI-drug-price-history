@@ -1,112 +1,112 @@
 {
-  "indexFetchToParsedMs": 5082,
-  "parsedToSearchableMs": 397,
+  "indexFetchToParsedMs": 4476,
+  "parsedToSearchableMs": 257,
   "search": [
     {
       "q": "a",
       "round": "cold",
-      "compute": 27,
-      "render": 16,
-      "toPaint": 625,
+      "compute": 9,
+      "render": 5,
+      "toPaint": 234,
       "results": 50
     },
     {
       "q": "a",
+      "round": "warm",
+      "compute": 18,
+      "render": 2,
+      "toPaint": 77,
+      "results": 50
+    },
+    {
+      "q": "錠",
+      "round": "cold",
+      "compute": 9,
+      "render": 2,
+      "toPaint": 215,
+      "results": 50
+    },
+    {
+      "q": "錠",
       "round": "warm",
       "compute": 10,
-      "render": 3,
-      "toPaint": 107,
+      "render": 9,
+      "toPaint": 75,
       "results": 50
     },
     {
-      "q": "錠",
+      "q": "paroxetine",
       "round": "cold",
-      "compute": 16,
-      "render": 5,
-      "toPaint": 154,
-      "results": 50
+      "compute": 14,
+      "render": 1,
+      "toPaint": 64,
+      "results": 24
     },
     {
-      "q": "錠",
+      "q": "paroxetine",
       "round": "warm",
       "compute": 15,
-      "render": 3,
-      "toPaint": 128,
-      "results": 50
-    },
-    {
-      "q": "paroxetine",
-      "round": "cold",
-      "compute": 28,
-      "render": 2,
-      "toPaint": 120,
-      "results": 24
-    },
-    {
-      "q": "paroxetine",
-      "round": "warm",
-      "compute": 32,
-      "render": 3,
-      "toPaint": 68,
-      "results": 24
-    },
-    {
-      "q": "AC48092100",
-      "round": "cold",
-      "compute": 53,
       "render": 1,
-      "toPaint": 65,
+      "toPaint": 40,
+      "results": 24
+    },
+    {
+      "q": "AC48092100",
+      "round": "cold",
+      "compute": 35,
+      "render": 0,
+      "toPaint": 43,
       "results": 1
     },
     {
       "q": "AC48092100",
       "round": "warm",
-      "compute": 52,
+      "compute": 38,
       "render": 0,
-      "toPaint": 64,
+      "toPaint": 47,
       "results": 1
     },
     {
       "q": "a",
       "round": "cold",
-      "compute": 7,
-      "render": 4,
-      "toPaint": 103,
+      "compute": 4,
+      "render": 2,
+      "toPaint": 152,
       "results": 50
     },
     {
       "q": "a",
       "round": "warm",
-      "compute": 11,
-      "render": 6,
-      "toPaint": 100,
+      "compute": 3,
+      "render": 2,
+      "toPaint": 58,
       "results": 50
     }
   ],
   "shardToChartMs": [
     {
       "code": "A017014321",
-      "responseEndToPaint": 960,
-      "fetchParse": 185,
-      "detailRender": 37
+      "responseEndToPaint": 492,
+      "fetchParse": 154,
+      "detailRender": 20
     },
     {
       "code": "AC48092100",
-      "responseEndToPaint": 153,
-      "fetchParse": 239,
-      "detailRender": 8
+      "responseEndToPaint": 123,
+      "fetchParse": 219,
+      "detailRender": 15
     },
     {
       "code": "AC49000209",
-      "responseEndToPaint": 367,
-      "fetchParse": 328,
-      "detailRender": 18
+      "responseEndToPaint": 224,
+      "fetchParse": 244,
+      "detailRender": 4
     },
     {
       "code": "A017014321",
       "responseEndToPaint": null,
       "fetchParse": 0,
-      "detailRender": 24
+      "detailRender": 12
     }
   ],
   "conditions": {
@@ -119,5 +119,5 @@
     "gzip": "level 6",
     "browser": "151.0.7922.34"
   },
-  "measuredAt": "2026-09-12T07:34:28.071Z"
+  "measuredAt": "2026-09-12T08:07:49.805Z"
 }
