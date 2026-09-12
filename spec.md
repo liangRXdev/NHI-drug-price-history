@@ -257,7 +257,8 @@ CSV 共 20 欄。至少保留：
 }
 ```
 
-- `window` 每筆與 §5.2 的 record 同構（含 `rawPrice`、`eventType`、`previousPrice`），搜尋卡的「暫停支付（`-`）」、「終止前 X 元」、「調整為 X 元（±Y%）」皆由此取得。
+- `window` 每筆與 §5.2 的 record 同構（含 `rawPrice`、`eventType`、`previousPrice`），另加 `pricedBefore`；搜尋卡的「暫停支付（`-`）」、「終止前 X 元」、「調整為 X 元（±Y%）」皆由此取得。
+- `pricedBefore`（僅 index window）：該列**之前**最後一個 `priced` 金額，無則 null；只看排序在前的列，不受未來恢復支付影響。搜尋卡的「終止前／暫停前 X 元」取此值，並以它是否為 null 判斷首列 0 元例外（§5.3）。理由：「終止→終止續期」的 `eventType` 為 `unchanged`、`previousPrice` 為 null（§5.4 序 3），搜尋卡只有 window 無法回看歷史（Phase 2 實作時發現，2026-09-12 實測 45 個代號受影響）。詳細頁有完整 history，不需此欄。
 - `flags`（代號層）：`gap`、`overlap`、`conflict`、`invalid_records`、`question_mark`、`inconsistent_metadata`；供搜尋卡顯示品質提示。
 - 描述欄位依 §6.6 規則以 build 日選列。
 - `historyCount`、`priceChangeCount`、`lastPriceChangeDate` 以 **build 日為參考日期**（§5.5）。
@@ -659,7 +660,7 @@ Y-axis：健保支付價（NTD）
 - 預告區間：虛線或淡色，標示「預告」
 - 開放迄日（`to: null`）的區間畫至 max(今天, 最後預告區間起日)，不延伸至 2910 年
 
-建議 Chart.js：`stepped` 設定、`spanGaps: false`，非有價區間的資料值為 `null`（不得為 0）。若使用其他 library，bundle size 應控制。
+實作採**手刻 SVG**（2026-09-12 定案，沿用 `pharmacy-tool-style`「不引入外部 JS 函式庫」；原建議 Chart.js 撤回）。圖表先由純函式產生「區段模型」再繪製：只有 `priced` 區間產生水平價格線段，相鄰有價區間以垂直線相接（step）；非有價區間與空窗不產生價格點（不得以 0 代替）；終止／暫停以區塊標示。開放迄日畫至 max(今日, 最後一筆起日)，右側另留少量邊界供預告區間可見。
 
 ### 8.3 History table
 
@@ -787,7 +788,8 @@ Phase 2 才考慮。
 ```text
 NHI-drug-price-history/
 ├─ index.html
-├─ app.js
+├─ app.js                      # DOM、資源載入、競態
+├─ engine.js                   # 純邏輯（ES module）：摘要、標籤、搜尋、圖表區段模型
 ├─ styles.css
 ├─ build_price_history.py      # 建置主程式：來源 → guards → 寫檔（guard 全過才寫）
 ├─ lib/
@@ -994,7 +996,8 @@ golden 代號已核對區間被改寫（WARNING）
 | `tests/test_history.py` | A2（逐筆守恆）、A3、A4、A5、A6、A7、A8、E1、E2 |
 | `tests/test_build.py` | B1–B8（mock 來源、guard 邊界、diff、並行） |
 | `tests/test_golden.py` | D2、D3（凍結快照＋固定參考日期） |
-| 前端測試（Phase 2 決定工具） | C1–C8、E3–E6 |
+| `tests-js/*.test.mjs`（`node --test`，零依賴） | C1–C4、E1–E6 的純邏輯（`engine.js`）；golden 11 代號以同一份凍結快照交叉比對 Python 摘要 |
+| `e2e/*.spec.mjs`（Playwright） | C1、C3–C8（DOM、viewport、route mock 模擬 404／延遲／損毀） |
 | Phase 2 驗收紀錄 | C2 人工截圖審查、E7 效能量測 |
 
 ---

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#3D7A8A">
+<meta name="description" content="台灣健保藥價歷史查詢：以健保藥品代號、中英文品名或成分查詢 1995 年至今的完整健保支付價歷史、調價幅度與終止／暫停支付狀態。資料來源為中央健康保險署開放資料，供臨床藥師與醫療人員參考。">
+<title>健保藥價歷史查詢</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="site-header">
+    <h1>健保藥價歷史查詢</h1>
+    <p class="sub">以健保藥品代號為單位，呈現 1995 年健保開辦至今（含已公告未生效）的健保支付價歷史</p>
+  </header>
+
+  <div id="banners" class="warnings" aria-live="polite"></div>
+
+  <main>
+    <section id="searchView" aria-labelledby="searchTitle">
+      <div class="card">
+        <h2 id="searchTitle">搜尋藥品</h2>
+        <p class="hint">可輸入健保代號（完整或開頭）、中文品名、英文品名或成分；不分大小寫。</p>
+        <input id="q" class="search-input" type="search" autocomplete="off" spellcheck="false"
+               placeholder="資料載入中…" aria-label="搜尋健保代號、中文品名、英文品名或成分" disabled>
+        <p id="searchStatus" class="search-status" role="status"></p>
+        <div id="results" class="results-list"></div>
+      </div>
+    </section>
+
+    <section id="detailView" hidden>
+      <p class="back"><a href="./" id="backLink">← 回搜尋</a></p>
+      <div id="detail" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <section class="card source-card" aria-labelledby="sourceTitle">
+    <h2 id="sourceTitle">資料來源與更新時間</h2>
+    <dl id="sourceInfo" class="facts"><dt>狀態</dt><dd>載入中…</dd></dl>
+  </section>
+
+  <p class="disclaimer">
+    本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。
+    資料來源：健保署「健保用藥品項查詢項目檔」（A21030000I-E41001-001），每週自動檢查、官方每月更新；請以健保署公告為準。
+    現行支付價依您裝置的日期判定（有效區間含起迄當日）。支付價 0 元視為終止支付；來源標示「-」依臨床藥師判斷視為暫停支付，並併列原始標記。
+    變動 % ＝（新價 − 前價）÷ 前價 × 100%，四捨五入至小數 2 位；恢復支付以停止前最後一個有價金額為比較基準，不計入調價次數。
+    品名、成分等描述欄位為來源以現況回填，非各期間當時的名稱。本工具不提供診斷或用藥建議。
+  </p>
+</div>
+</body>
+</html>

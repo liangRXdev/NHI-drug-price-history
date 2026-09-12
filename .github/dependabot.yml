@@ -10,3 +10,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # 僅前端測試用（@playwright/test）；網站本身無 npm 依賴
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly

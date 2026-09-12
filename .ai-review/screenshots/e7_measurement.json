@@ -1,0 +1,123 @@
+{
+  "indexFetchToParsedMs": 5082,
+  "parsedToSearchableMs": 397,
+  "search": [
+    {
+      "q": "a",
+      "round": "cold",
+      "compute": 27,
+      "render": 16,
+      "toPaint": 625,
+      "results": 50
+    },
+    {
+      "q": "a",
+      "round": "warm",
+      "compute": 10,
+      "render": 3,
+      "toPaint": 107,
+      "results": 50
+    },
+    {
+      "q": "錠",
+      "round": "cold",
+      "compute": 16,
+      "render": 5,
+      "toPaint": 154,
+      "results": 50
+    },
+    {
+      "q": "錠",
+      "round": "warm",
+      "compute": 15,
+      "render": 3,
+      "toPaint": 128,
+      "results": 50
+    },
+    {
+      "q": "paroxetine",
+      "round": "cold",
+      "compute": 28,
+      "render": 2,
+      "toPaint": 120,
+      "results": 24
+    },
+    {
+      "q": "paroxetine",
+      "round": "warm",
+      "compute": 32,
+      "render": 3,
+      "toPaint": 68,
+      "results": 24
+    },
+    {
+      "q": "AC48092100",
+      "round": "cold",
+      "compute": 53,
+      "render": 1,
+      "toPaint": 65,
+      "results": 1
+    },
+    {
+      "q": "AC48092100",
+      "round": "warm",
+      "compute": 52,
+      "render": 0,
+      "toPaint": 64,
+      "results": 1
+    },
+    {
+      "q": "a",
+      "round": "cold",
+      "compute": 7,
+      "render": 4,
+      "toPaint": 103,
+      "results": 50
+    },
+    {
+      "q": "a",
+      "round": "warm",
+      "compute": 11,
+      "render": 6,
+      "toPaint": 100,
+      "results": 50
+    }
+  ],
+  "shardToChartMs": [
+    {
+      "code": "A017014321",
+      "responseEndToPaint": 960,
+      "fetchParse": 185,
+      "detailRender": 37
+    },
+    {
+      "code": "AC48092100",
+      "responseEndToPaint": 153,
+      "fetchParse": 239,
+      "detailRender": 8
+    },
+    {
+      "code": "AC49000209",
+      "responseEndToPaint": 367,
+      "fetchParse": 328,
+      "detailRender": 18
+    },
+    {
+      "code": "A017014321",
+      "responseEndToPaint": null,
+      "fetchParse": 0,
+      "detailRender": 24
+    }
+  ],
+  "conditions": {
+    "cpuThrottle": 4,
+    "network": {
+      "latencyMs": 60,
+      "downloadMbps": 9,
+      "uploadMbps": 1.5
+    },
+    "gzip": "level 6",
+    "browser": "151.0.7922.34"
+  },
+  "measuredAt": "2026-09-12T07:34:28.071Z"
+}

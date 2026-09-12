@@ -53,7 +53,8 @@
 | D9 | 描述欄位：build 日有效列 → 已生效列中最新者 → 無則顯示代號＋「—」；**不以預告列回填**。shard 保存「各列不一致時的所有變體」，詳細頁依瀏覽器日期套用同一規則 | 來源以現況回填（非歷史值）；預告列實測出現損毀。shard 存變體可維持 shard 與 build 日無關。 |
 | D10 | 每個 shard 帶**自己內容的 `shardVersion`**；`meta.shards.versions` 列出各片 hash，`dataVersion`＝該對照表的 hash，寫入 meta、index、status。前端比對 index↔meta 與 shard↔meta，不一致 → 不組合摘要、提示重新整理 | Pages CDN 快取約 10 分鐘，舊頁面或新載入都可能混到不同批次（verdict 2.1）。每片只帶自己的 hash：若每片都帶全域版本，改一個價格就會改寫全部 348 片，違反 B5（Phase 1 實作時發現，2026-09-11 修正）。hash 只依來源內容，shard 跨 build 日維持 deterministic。 |
 | D11 | build workflow 使用 `concurrency` group（排隊、不取消）；push 被拒一律 fail，不 force push；Pages 由 main 分支根目錄部署 | 排程與手動觸發重疊時，避免較舊結果覆蓋較新結果（verdict 2.2）。 |
-| D12 | 前端樣式沿用 `pharmacy-tool-style`；Chart.js stepped line，`spanGaps: false` | 臨床工具群視覺一致；step chart 反映區間內固定值。 |
+| D12 | 前端樣式沿用 `pharmacy-tool-style`；圖表**手刻 SVG** step chart，由純函式 `chartModel()` 產生區段模型再繪製（2026-09-12 改，原 Chart.js） | 臨床工具群視覺一致、house style 不引入外部 JS；step chart 反映區間內固定值；區段模型是純資料，比斷言 Chart.js 設定更能證偽。 |
+| D13 | 前端測試：`engine.js` 純邏輯用 `node --test`（零依賴）；DOM／viewport／競態用 Playwright | repo 以 Python 為主，純邏輯測試不必引入 npm 依賴；C5–C8 需要真瀏覽器與 route mock。 |
 
 ---
 
@@ -160,7 +161,7 @@
   terminated（終止前 10）→ 預告 relisted 20：前一天顯示「已終止支付（終止前 10 元）」＋預告「恢復支付 20 元」；終止前價格**不得**為 20。
   suspended → priced；空窗期間的日期 → 「此日期無支付紀錄（空窗）」。
   搜尋卡 window 耗盡 → 「需更新，請開啟詳細頁」，不得顯示任何確定價格；詳細頁仍由 history 正確判定。
-- **C2 圖表不誤導**：chart 設定為 stepped、`spanGaps: false`；terminated／suspended／missing／malformed 區間與空窗在 dataset 中為 `null`，不得為 0；開放迄日畫至 max(今日, 最後預告起日)，x 軸不得出現 2910 年；預告區間 dataset 樣式（虛線／淡色）與已生效區間不同；有 priced 區間的代號，其圖表 dataset 非空。Phase 2 驗收時，對 11 個 golden 代號做**人工截圖審查**並存檔於 `.ai-review/screenshots/`。
+- **C2 圖表不誤導**（斷言 `chartModel()` 區段模型）：只有 priced 區間產生價格線段，且線段 y 值等於該區間價格；terminated／suspended／missing／malformed 區間與空窗**不產生**價格線段、也不產生 y＝0 的點；空窗兩側的線段之間不得有垂直連接線；開放迄日畫至 max(今日, 最後一筆起日)，x 軸上限不得晚於該日＋右側邊界（不得出現 2910 年）；預告區間（from > 今日）的區段帶 upcoming 標記並以虛線繪製；有 priced 區間的代號，其價格線段非空。Phase 2 驗收時，對 11 個 golden 代號做**人工截圖審查**並存檔於 `.ai-review/screenshots/`。
 - **C3 過期警示**：天數 = 瀏覽器本地日期 − `lastCheckedAt` 的 +08:00 日期。21／22／45／46 天 → 無／黃／黃／紅；`status.json` 404、JSON 損毀、時間無法解析 → 紅；紅色時現行價旁同步加註。
 - **C4 搜尋**：比對為不分大小寫的子字串（代號另支援前綴）。`AC48092100` → 第一筆為該代號，即使另有 > 50 筆候選；`ac4809` → 含該代號；「撫緒」、`caremod`、`paroxetine` → 各自含該代號；符合項位於全資料第 50 筆之後仍可找到；終止品項不被排除；空白查詢 → 顯示提示、不列結果；不存在字串 → 空結果訊息；任何查詢 render ≤ 50 筆。
 - **C5 deep link**：兩個位於不同 shard 的代號，以 `?code=` 直接開啟與重新整理，標題、價格、歷史均與 URL 相符；index 載入中不顯示「查無」；`?code=ZZZ` → 「查無此代號」且不殘留前一品項內容；專案子路徑（`/NHI-drug-price-history/`）下有效。
@@ -205,7 +206,7 @@
 
 1. ~~首列 0 元的語意~~ → **已定案（2026-09-11）**：state 維持 `terminated`；「此前從未有價」的 0 元區間 UI 標籤為「健保支付價 0 元（此前無有價紀錄）」，不得含「終止」（spec §5.3）。
 2. ~~B8 語意異常 guard~~ → **已定案（2026-09-11）**：納入，附 `workflow_dispatch` + `allow_anomaly=true` 人工放行（僅限語意 guard、排程觸發不得放行）。
-3. data.gov.tw 從 runner 的可達性未驗證（失敗不擋 build）。
+3. ~~data.gov.tw 從 runner 的可達性~~ → **已驗證（2026-09-12）**：手動 dispatch run 34678852901 取得 `sourceModifiedAt = 2026-08-28 07:05:11`，無變動路徑只 commit `status.json`。
 4. ~~健保署查詢網站是否顯示完整歷史~~ → **已確認（2026-09-11）**：11 個 golden 代號的網站列數皆等於 CSV 列數（合計 114），342 個核對格全為 ✓、無「不可核對」，D1 以原完成條件達成。
 
 ---
@@ -243,3 +244,4 @@
 | v2 | golden 雙向核對、反例性質綁定、凍結快照與 WARNING 分工 | 3.22–3.24、4.2 |
 | v2 | 新增 E 類驗收 | 3.25 |
 | v2.1 | D10 改為每片 `shardVersion`＋meta 對照表（原設計與 B5 衝突，Phase 1 實作時發現）；分片改前 4 碼（2 碼時 A0 gzip 3.35 MB 超過 warning） | 實作回饋 |
+| v2.2 | D12 改手刻 SVG、C2 改斷言區段模型（使用者 2026-09-12 選定）；新增 D13 前端測試工具；index window 加 `pricedBefore`（「終止→終止續期」previousPrice 為 null，搜尋卡拿不到終止前價格，實測 45 代號） | Phase 2 實作回饋 |

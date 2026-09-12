@@ -18,3 +18,8 @@ Thumbs.db
 
 # Claude Code 本機狀態
 .remember/
+
+# Node（前端測試）
+node_modules/
+test-results/
+playwright-report/

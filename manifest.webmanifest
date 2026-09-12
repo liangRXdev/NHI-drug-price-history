@@ -1,0 +1,14 @@
+{
+  "name": "健保藥價歷史查詢",
+  "short_name": "健保藥價歷史",
+  "description": "以健保藥品代號查詢 1995 年至今的完整健保支付價歷史",
+  "lang": "zh-TW",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F5F0E8",
+  "theme_color": "#3D7A8A",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

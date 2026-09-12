@@ -1,0 +1,212 @@
+/* 健保藥價歷史查詢 — pharmacy-tool-style house tokens（資料查詢／儀表板型）
+   對比（2026-09-12 實算，WCAG AA 正文 4.5:1）：
+   - --text-muted #6B7280 只用在白卡內（4.83:1）；米色裸底一律 --text-primary
+   - 淡色底上的語意文字：info 用 --accent-hover（on #EFF4F6 5.41:1）、warn 用 --warn-text
+     （on #FFF3E0 6.20:1）。house style 原寫法 accent 4.36:1、--warning 2.60:1 皆不過 AA
+   - 米色裸底上的連結用 --accent-hover（5.29:1；--accent 僅 4.26:1） */
+:root {
+  --bg-primary:    #F5F0E8;
+  --bg-card:       #FFFFFF;
+  --accent:        #3D7A8A;
+  --accent-hover:  #2E6B7A;
+  --accent-light:  rgba(61,122,138,0.08);
+  --text-primary:  #2C2C2C;
+  --text-muted:    #6B7280;
+  --border:        #E0D9CE;
+  --danger:        #C0392B;
+  --success:       #27AE60;
+  --warning:       #E67E22;
+  --warn-text:     #8A4B08;
+  --radius:        8px;
+  --mono:          'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  /* 圖表（預設 warm；色盲友善模式見 .cb-safe） */
+  --c-line:        #3D7A8A;
+  --c-upcoming:    #3D7A8A;
+  --c-term:        #C0392B;
+  --c-susp:        #6B7280;
+  --c-unknown:     #8A4B08;
+  --c-gap:         #B8AE9C;
+}
+.cb-safe {
+  --c-line:        #0072B2;
+  --c-upcoming:    #0072B2;
+  --c-term:        #D55E00;
+  --c-susp:        #555B66;
+  --c-unknown:     #E69F00;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg-primary);
+  font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+  color: var(--text-primary); line-height: 1.6; font-size: 0.95rem;
+}
+.mono, .val, .num { font-family: var(--mono); }
+a { color: var(--accent-hover); }
+a:focus-visible, button:focus-visible, input:focus-visible, .result:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 2px;
+}
+
+.wrap { max-width: 980px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+.site-header h1 { font-size: 1.5rem; margin: 0; color: var(--accent-hover); }
+.site-header .sub { margin: 0.25rem 0 0; font-size: 0.85rem; }
+
+.card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.25rem 1.25rem 1.5rem;
+  margin-top: 1.25rem; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.card h2 { font-size: 1.05rem; margin: 0 0 0.25rem; display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.card .hint { font-size: 0.78rem; color: var(--text-muted); margin: 0 0 1rem; }
+.ref-date { font-size: 0.78rem; font-weight: 400; color: var(--text-muted); }
+
+/* ── 警示 ── */
+.warnings { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.warnings:empty { display: none; }
+.alert       { border: 1px solid; border-radius: 6px; padding: 0.6rem 0.8rem; font-size: 0.85rem; }
+.alert--info { background: #EFF4F6; border-color: var(--accent);  color: var(--accent-hover); }
+.alert--warn { background: #FFF3E0; border-color: #FFCC80;        color: var(--warn-text); }
+.alert--error{ background: #FDF3F2; border-color: #EF9A9A;        color: var(--danger); }
+.alert--warn::before  { content: "⚠ "; }
+.alert--error::before { content: "⚠ "; }
+.alert--info::before  { content: "– "; }
+.alert button { margin-left: 0.5rem; }
+
+button {
+  font: inherit; font-size: 0.82rem; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--bg-card); color: var(--accent-hover);
+  border-radius: 6px; padding: 0.25rem 0.7rem;
+}
+button:hover { background: var(--accent-light); }
+
+/* ── 搜尋 ── */
+.search-input {
+  width: 100%; font: inherit; font-size: 1rem; padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text-primary);
+}
+.search-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
+.search-input:disabled { background: #FAF8F4; }
+.search-status { font-size: 0.82rem; margin: 0.6rem 0 0; min-height: 1.2em; }
+.results-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+.result {
+  display: block; text-decoration: none; color: inherit;
+  border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;
+}
+.result:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }   /* 不換底色：muted 字在淡底上 < 4.5:1 */
+.r-top { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; justify-content: space-between; }
+.r-name { font-weight: 700; font-size: 0.95rem; }
+.r-code { font-size: 0.82rem; color: var(--text-muted); }
+.r-en, .r-sub, .r-meta { font-size: 0.8rem; color: var(--text-muted); overflow-wrap: anywhere; }
+.r-price { margin-top: 0.3rem; font-size: 0.9rem; display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; align-items: baseline; }
+.r-price .val { font-weight: 700; font-size: 1rem; }
+
+/* ── 標籤（語意色一律帶符號前綴） ── */
+.tag {
+  display: inline-block; font-size: 0.72rem; line-height: 1.4; padding: 0.05rem 0.4rem;
+  border-radius: 4px; border: 1px solid var(--border); color: var(--text-primary); background: #FAF8F4;
+  white-space: nowrap;
+}
+.tag.warn  { border-color: #FFCC80; background: #FFF3E0; color: var(--warn-text); }
+.tag.warn::before  { content: "⚠ "; }
+.tag.stop  { border-color: #EF9A9A; background: #FDF3F2; color: var(--danger); }
+.tag.stop::before  { content: "■ "; }
+.tag.info  { border-color: var(--accent); background: #EFF4F6; color: var(--accent-hover); }
+.tag.info::before  { content: "– "; }
+.tag.now   { border-color: var(--accent); background: var(--accent); color: #fff; }
+.tag.now::before   { content: "✓ "; }
+
+/* ── 詳細頁 ── */
+.back { margin: 1rem 0 0; font-size: 0.9rem; }
+.detail-head .code { font-size: 0.85rem; color: var(--text-muted); }
+.detail-head h2 { font-size: 1.3rem; margin: 0.1rem 0; }
+.detail-head .en { font-size: 0.9rem; color: var(--text-muted); overflow-wrap: anywhere; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.8rem; margin: 0.8rem 0 0; font-size: 0.85rem; }
+.facts dt { color: var(--text-muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.links { margin-top: 0.8rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.85rem; }
+
+.results { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.6rem; margin-top: 0.75rem; }
+.metric  { border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
+.metric .name { font-size: 0.72rem; color: var(--text-muted); }
+.metric .val  { font-size: 1.15rem; font-weight: 700; overflow-wrap: anywhere; }
+.metric .val.text { font-family: inherit; font-size: 0.92rem; }
+.metric .ci   { font-size: 0.7rem; color: var(--text-muted); font-family: var(--mono); }
+.metric.key   { border-color: var(--accent); background: var(--accent-light); grid-column: span 2; }
+/* 淡色底上 muted 只有 ~4.4:1，key 卡內的次要文字改用 --text-primary */
+.metric.key .name, .metric.key .interp.muted, .metric.key .ci { color: var(--text-primary); }
+.metric .interp { font-size: 0.75rem; margin-top: 0.25rem; }
+.metric .interp.good  { color: var(--accent-hover); }
+.metric .interp.muted { color: var(--text-muted); }
+.metric .interp.warn  { color: var(--danger); }
+.metric .interp.good::before  { content: "✓ "; }
+.metric .interp.muted::before { content: "– "; }
+.metric .interp.warn::before  { content: "⚠ "; }
+.candidates { font-size: 0.8rem; margin: 0.3rem 0 0; padding-left: 1.1rem; }
+
+/* 圖表 */
+.chart-wrap { width: 100%; overflow-x: auto; }
+.chart { width: 100%; max-width: 100%; height: auto; display: block; }
+.chart text { font-family: var(--mono); font-size: 11px; fill: var(--text-muted); }
+.chart .axis line, .chart .axis path { stroke: #CFC6B8; }
+.chart .grid line { stroke: #EEE8DD; }
+.chart .price { stroke: var(--c-line); stroke-width: 2.5; fill: none; }
+.chart .price.upcoming { stroke: var(--c-upcoming); stroke-dasharray: 6 4; opacity: 0.75; }
+.chart .hit { stroke: transparent; stroke-width: 14; fill: none; }
+.chart .band-term { fill: url(#hatchTerm); }
+.chart .band-susp { fill: url(#dotsSusp); }
+.chart .band-unknown { fill: url(#crossUnknown); }
+.chart .band-gap { fill: #F3EFE8; }
+.chart .band-upcoming { opacity: 0.55; }
+.chart .today line { stroke: var(--text-primary); stroke-dasharray: 2 3; }
+.chart .marker { stroke: #fff; stroke-width: 1; }
+.chart .marker.increase { fill: var(--c-term); }
+.chart .marker.decrease { fill: var(--c-line); }
+.chart .marker.relisted { fill: var(--c-unknown); }
+.chart .marker.upcoming { opacity: 0.7; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; margin-top: 0.5rem; font-size: 0.78rem; color: var(--text-muted); }
+.legend svg { vertical-align: middle; margin-right: 0.25rem; }
+.chart-opts { margin-top: 0.5rem; font-size: 0.8rem; }
+.axis-note { font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0; }
+
+/* 歷史表 */
+.table-tools { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.table-wrap { overflow-x: auto; margin-top: 0.6rem; }
+table.history { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+table.history th, table.history td { border: 1px solid var(--border); padding: 0.35rem 0.5rem; vertical-align: top; }
+table.history th { background: #EFF4F6; color: var(--accent-hover); font-weight: 500; text-align: left; white-space: nowrap; }
+table.history td.num { text-align: right; white-space: nowrap; }
+table.history td.num.label { white-space: normal; text-align: left; min-width: 7.5em; }   /* 狀態標籤可換行，價格欄不被撐寬 */
+table.history td.date { white-space: nowrap; font-family: var(--mono); }
+table.history tr.is-upcoming td { background: #FBFAF6; }
+table.history tr.is-current td { background: var(--accent-light); }
+table.history tr.is-invalid td { background: #FDF3F2; }
+table.history .cell-state { display: flex; flex-wrap: wrap; gap: 0.2rem; }
+
+.source-card .facts { margin-top: 0.5rem; }
+.disclaimer { font-size: 0.78rem; text-align: center; margin: 1.5rem auto 0; max-width: 46rem; color: var(--text-primary); }
+
+.loading { font-size: 0.85rem; color: var(--text-muted); }
+
+@media (max-width: 480px) {
+  .wrap { padding: 1rem 0.75rem 3rem; }
+  .card { padding: 1rem 0.85rem 1.2rem; }
+  .metric.key { grid-column: auto; }
+  .results { grid-template-columns: 1fr; }
+  .facts { grid-template-columns: 1fr; }
+  .facts dt { margin-top: 0.3rem; }
+  table.history { font-size: 0.78rem; }
+  table.history th, table.history td { padding: 0.3rem 0.35rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+@media print {
+  @page { margin: 15mm; }
+  body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 12px; }
+  #searchView, .back, .chart-opts, .table-tools button, #banners button { display: none !important; }
+  .card { box-shadow: none; break-inside: avoid; }
+  .table-wrap { overflow: visible; }
+}

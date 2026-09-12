@@ -12,7 +12,8 @@
 
 - [x] Phase 1 資料層：ETL、index／history shards、guards、單元測試、CI workflow
 - [x] Phase 1 golden 人工核對：11 個代號、114 列於健保署查詢網站核對全數相符（2026-09-11），已凍結為 `tests/fixtures/golden_*.json`
-- [ ] Phase 2 前端 dashboard
+- [x] Phase 2 前端 dashboard：搜尋、摘要、手刻 SVG 階梯圖、歷史表、`?code=` deep link、過期警示、四態載入與競態（驗收紀錄：[`.ai-review/phase2-acceptance.md`](.ai-review/phase2-acceptance.md)）
+- [ ] Phase 2 待辦：C2 截圖藥師目檢、E7 兩項未達標待決定、啟用 GitHub Pages
 
 ## 資料語意（摘要）
 
@@ -35,6 +36,17 @@ uv sync
 uv run pytest -q                                   # 單元測試（golden 未核對者顯示 skip）
 uv run python build_price_history.py               # 從官方端點下載並建置 data/
 uv run python build_price_history.py --source-file .cache/nhi_raw_2026-09-11.csv --no-metadata
+```
+
+前端（無 build step；`index.html` + `app.js` + `engine.js` + `styles.css`，需 Node 22+ 跑測試）：
+
+```bash
+npm ci
+npm test                                           # engine.js 純邏輯 + golden 交叉比對
+npx playwright install chromium                    # 首次
+npm run e2e                                        # DOM／viewport／競態（route mock）
+node scripts/measure_e7.mjs                        # E7 效能量測 + C2 截圖（非 CI）
+uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 JS 用 golden fixture
 ```
 
 - 任一 guard 失敗 → exit 1，`data/` 與 `status.json` 皆不寫入

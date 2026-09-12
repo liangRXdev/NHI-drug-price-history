@@ -1,0 +1,13 @@
+{
+  "name": "nhi-drug-price-history-frontend",
+  "private": true,
+  "type": "module",
+  "description": "前端測試用；網站本身無 build step",
+  "scripts": {
+    "test": "node --test \"tests-js/*.test.mjs\"",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}
