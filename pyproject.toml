@@ -2,6 +2,8 @@
 name = "nhi-drug-price-history"
 version = "0.1.0"
 description = "台灣健保藥價歷史查詢：NHI 健保用藥品項檔的完整支付價歷史 ETL"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.32",
