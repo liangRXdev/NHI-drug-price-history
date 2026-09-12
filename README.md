@@ -74,3 +74,7 @@ uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 J
 - `build-data.yml`：每週一 02:00（台灣）檢查；`contents: write`；actions 皆 pin commit SHA
   - info.nhi.gov.tw 偶發 `RemoteDisconnected`（2026-09-12 連三次失敗、20 分鐘後重跑成功；TFDA 專案 2026-08-30 同樣現象）。失敗時不寫入任何檔案，下次排程或手動 Run workflow 即可
 - `test.yml`：PR 與 push 時執行測試（唯讀）
+
+## 授權
+
+本專案程式碼採 [MIT License](LICENSE)。健保署公開資料之著作權與使用條款依原始來源規定，不在本授權範圍內。
