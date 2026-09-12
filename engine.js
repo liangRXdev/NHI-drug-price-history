@@ -385,10 +385,25 @@ export function prepareIndex(drugs) {
 }
 
 /**
- * 不分大小寫子字串比對（代號另支援完全相符／前綴優先）。
- * 空白查詢 → null（只顯示提示）；否則 { total, items }，items 至多 MAX_RESULTS 筆。
+ * 瀏覽器日期 T 當日「現行為健保支付 0 元」的品項（含此前從未有價的 0 元）→ 布林陣列，與 prepared 同序。
+ * 判定與搜尋卡相同：T 當日恰一筆有效 window 列、無衝突、priceState 為 terminated。
+ * 暫停支付、衝突、window 耗盡、只有預告等不確定狀態一律不算，寧可多顯示也不誤藏。
  */
-export function search(prepared, query) {
+export function terminatedMask(prepared, T) {
+  return prepared.drugs.map((d) => {
+    const eff = (d.window || []).filter((r) => isEffective(r, T));
+    return eff.length === 1 && eff[0].priceState === 'terminated'
+      && !eff[0].flags.some((f) => f === 'conflict' || f === 'conflicting_price_interval' || f === 'overlap');
+  });
+}
+
+/**
+ * 不分大小寫子字串比對（代號另支援完全相符／前綴優先）。
+ * 空白查詢 → null（只顯示提示）；否則 { total, hidden, items }，items 至多 MAX_RESULTS 筆。
+ * hideMask（terminatedMask 結果）：為 true 者不列入、只計入 hidden；**代號完全相符者一律顯示**，
+ * 避免使用者輸入完整代號卻像「查無」。
+ */
+export function search(prepared, query, hideMask = null) {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return null;
   const { drugs, codes, hays } = prepared;
@@ -396,6 +411,7 @@ export function search(prepared, query) {
   const prefix = [];
   const other = [];
   let total = 0;
+  let hidden = 0;
   for (let i = 0; i < codes.length; i++) {
     const c = codes[i];
     let bucket = null;
@@ -403,11 +419,12 @@ export function search(prepared, query) {
     else if (c.startsWith(q)) bucket = prefix;
     else if (hays[i].includes(q)) bucket = other;
     else continue;
+    if (hideMask && hideMask[i] && bucket !== exact) { hidden++; continue; }
     total++;
     if (bucket.length < MAX_RESULTS) bucket.push(drugs[i]);    // 只保留可能顯示的前 50 筆，其餘只計數
   }
   const items = exact.concat(prefix, other).slice(0, MAX_RESULTS);
-  return { total, items };
+  return { total, hidden, items };
 }
 
 // ── 分片與資料版本（spec §7、§8.7）──────────────────────────────

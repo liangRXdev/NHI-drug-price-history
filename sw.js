@@ -4,7 +4,7 @@
 // GitHub Pages 的專案頁共用同一個 origin（<user>.github.io），Cache Storage 不依 SW scope 隔離：
 // 清舊版時只能刪本專案前綴，否則會刪掉同網域其他臨床工具的離線快取（codex R9）。
 const PREFIX = 'nhi-price-shell-';
-const CACHE = `${PREFIX}v2`;
+const CACHE = `${PREFIX}v3`;
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'engine.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {

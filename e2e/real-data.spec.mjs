@@ -9,6 +9,7 @@ test('正式資料：搜尋卡不得出現「— 元」；首列 0 元代號不�
   await page.goto('/');
   const input = page.locator('#q');
   await expect(input).toBeEnabled({ timeout: 60_000 });
+  await page.getByLabel('顯示已終止支付品項').check();          // 要驗的正是終止／暫停卡，不可被預設篩選藏掉
 
   // 終止品項占 69%，這些常見字串的前 50 筆必含大量終止／暫停卡
   for (const q of ['錠', '注射', 'tab', 'a0']) {

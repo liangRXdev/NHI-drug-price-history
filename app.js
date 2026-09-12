@@ -235,24 +235,39 @@ function runSearch() {
   const q = $('q').value;
   const status = $('searchStatus');
   const t0 = performance.now();
-  const res = E.search(state.prepared, q);
+  const res = E.search(state.prepared, q, $('showTerminated').checked ? null : hideMask());
   performance.measure('search-compute', { start: t0 });
   if (res === null) {
     status.textContent = '請輸入健保代號、品名或成分開始搜尋。';
     $('results').innerHTML = '';
     return;
   }
+  const hiddenNote = res.hidden
+    ? `另有 ${res.hidden.toLocaleString('zh-TW')} 筆已終止支付品項未顯示（勾選「顯示已終止支付品項」即可查看）。`
+    : '';
   if (res.total === 0) {
-    status.textContent = `查無符合「${q.trim()}」的藥品。`;
+    // 全部被篩掉時不得只說「查無」：品項存在，只是目前終止支付
+    status.textContent = res.hidden
+      ? `沒有符合「${q.trim()}」的現行支付品項；${hiddenNote}`
+      : `查無符合「${q.trim()}」的藥品。`;
     $('results').innerHTML = '';
     return;
   }
-  status.textContent = res.total > E.MAX_RESULTS
+  status.textContent = (res.total > E.MAX_RESULTS
     ? `共 ${res.total.toLocaleString('zh-TW')} 筆，僅顯示前 ${E.MAX_RESULTS} 筆，請縮小搜尋範圍。`
-    : `共 ${res.total} 筆。`;
+    : `共 ${res.total} 筆。`) + hiddenNote;
   const t1 = performance.now();
   $('results').innerHTML = res.items.map(renderCard).join('');
   performance.measure('search-render', { start: t1 });
+}
+
+// 「現行 0 元」遮罩依瀏覽器日期而定：同一天只算一次，日期改變（state.today 於選藥時更新）才重算
+let maskCache = { prepared: null, day: null, mask: null };
+function hideMask() {
+  if (maskCache.prepared !== state.prepared || maskCache.day !== state.today) {
+    maskCache = { prepared: state.prepared, day: state.today, mask: E.terminatedMask(state.prepared, state.today) };
+  }
+  return maskCache.mask;
 }
 
 let searchFrame = 0;
@@ -640,6 +655,10 @@ function bind() {
   const q = $('q');
   q.addEventListener('input', (e) => { if (!e.isComposing) scheduleSearch(); });
   q.addEventListener('compositionend', scheduleSearch);
+  $('showTerminated').addEventListener('change', (e) => {
+    try { localStorage.setItem('showTerminated', e.target.checked ? '1' : ''); } catch { /* 無 storage：僅本次有效 */ }
+    scheduleSearch();
+  });
 
   $('results').addEventListener('click', (e) => {
     const a = e.target.closest('a.result');
@@ -686,7 +705,10 @@ function bind() {
   });
 }
 
-try { if (localStorage.getItem('cbSafe') === '1') document.body.classList.add('cb-safe'); } catch { /* 無 storage */ }
+try {
+  if (localStorage.getItem('cbSafe') === '1') document.body.classList.add('cb-safe');
+  if (localStorage.getItem('showTerminated') === '1') $('showTerminated').checked = true;
+} catch { /* 無 storage */ }
 bind();
 loadCore();
 

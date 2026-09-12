@@ -118,6 +118,30 @@ test('C4 中文／英文／成分；終止品項不排除；空白與不存在',
   await expect(page.locator('#searchStatus')).toContainText('查無符合');
 });
 
+// ── 「顯示已終止支付品項」篩選 ───────────────────────────────────────
+test('篩選：預設隱藏現行終止品項、完整代號仍可查到、勾選後顯示並記住', async ({ page }) => {
+  await mockSite(page);
+  await page.goto('/');
+  const box = page.getByLabel('顯示已終止支付品項');
+  await expect(box).not.toBeChecked();
+
+  await search(page, 'AC48845');                                // AC48845100 現行已終止：前綴查詢被隱藏
+  await expect(page.locator('.result')).toHaveCount(0);
+  await expect(page.locator('#searchStatus')).toContainText('沒有符合「AC48845」的現行支付品項');
+  await expect(page.locator('#searchStatus')).toContainText('另有 1 筆已終止支付品項未顯示');
+  await expect(page.locator('#searchStatus')).not.toContainText('查無');
+
+  await search(page, 'AC48845100');                             // 完整代號：一律顯示
+  await expect(page.locator('.result[data-code="AC48845100"]')).toHaveCount(1);
+
+  await search(page, 'AC48845');
+  await box.check();
+  await expect(page.locator('.result[data-code="AC48845100"]')).toHaveCount(1);
+  await expect(page.locator('#searchStatus')).not.toContainText('未顯示');
+  await page.reload();
+  await expect(page.getByLabel('顯示已終止支付品項')).toBeChecked();
+});
+
 // ── C5 deep link ────────────────────────────────────────────────
 for (const [code, name, price] of [['AC48092100', '撫緒', /^\d+\.\d{2}\s*元$/], ['B009254100', '', /已終止支付（終止前 4\.81 元）/]]) {
   test(`C5 ?code=${code} 直接開啟與重新整理`, async ({ page }) => {
@@ -140,7 +164,7 @@ for (const [code, name, price] of [['AC48092100', '撫緒', /^\d+\.\d{2}\s*元$/
 }
 
 test('C5 index 載入中不顯示「查無」；?code=ZZZ →「查無此代號」且不殘留前一品項', async ({ page }) => {
-  await mockSite(page, { indexDelay: 1500 });
+  await mockSite(page, { indexDelay: 4000 });                  // 需長於並行負載下 goto 的時間，才看得到載入中狀態
   await page.goto('/?code=AC48092100');
   await expect(detail(page)).toContainText('資料載入中');
   await expect(page.locator('body')).not.toContainText('查無');

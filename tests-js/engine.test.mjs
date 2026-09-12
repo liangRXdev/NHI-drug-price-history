@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
   chartModel, currentLabel, dayNumber, decimalChange, isEffective, latestEventLabel, MAX_RESULTS, prepareIndex,
-  priorPrices, search, searchCard, selectMeta, shardPrefix, staleness, stateLabel, summaryAt, totalChangeLabel,
+  priorPrices, search, searchCard, selectMeta, shardPrefix, staleness, stateLabel, summaryAt, terminatedMask, totalChangeLabel,
   upcomingLabel, validateIndex, validateMeta, validateShard,
 } from '../engine.js';
 
@@ -393,7 +393,7 @@ test('C4 中文／英文／成分不分大小寫子字串；終止品項不排�
 
 test('C4 空白查詢 → null；不存在 → 空；跨欄位邊界不得誤中', () => {
   assert.equal(search(makeIndex(), '   '), null);
-  assert.deepEqual(search(makeIndex(), 'no-such-thing'), { total: 0, items: [] });
+  assert.deepEqual(search(makeIndex(), 'no-such-thing'), { total: 0, hidden: 0, items: [] });
   // chName 結尾「錠」＋ enName 開頭「CAREMOD」→ 查「錠care」不得命中
   assert.equal(search(makeIndex(), '錠care').total, 0);
 });
@@ -411,6 +411,48 @@ test('C4 未排序的 index 仍依代號排序；已排序時不改動原陣列'
   assert.deepEqual(p.drugs.map((d) => d.code), ['A1', 'A10', 'B2']);
   assert.deepEqual(drugs.map((d) => d.code), ['B2', 'A1', 'A10']);
   assert.deepEqual(search(p, 'a1').items.map((d) => d.code), ['A1', 'A10']);
+});
+
+// ── 「顯示已終止支付品項」篩選（2026-09-12 使用者需求；預設隱藏）──────────
+function filterIndex() {
+  const T = '2026-09-11';
+  const mk = (code, window) => ({ code, chName: `藥${code}`, enName: '', ingredient: 'FILTERINE', window });
+  const drugs = [
+    mk('F000000001', [win(rec('2020-01-01', null, '10.00', 'initial'), null)]),                       // 有價
+    mk('F000000002', [win(rec('2020-01-01', null, '0.00', 'terminated', { previousPrice: 10 }), 10)]),  // 終止
+    mk('F000000003', [win(rec('2020-01-01', null, '0.00', 'initial'), null)]),                         // 此前無有價 0 元
+    mk('F000000004', [win(rec('2020-01-01', null, '-', 'suspended', { previousPrice: 10 }), 10)]),     // 暫停：不藏
+    mk('F000000005', [win(rec('2020-01-01', '2026-09-30', '10.00', 'initial'), null),
+      win(rec('2026-10-01', null, '0.00', 'terminated', { previousPrice: 10 }), 10)]),                // 預告終止、現行有價：不藏
+    mk('F000000006', [win(rec('2020-01-01', null, '0.00', 'terminated'), 10, ['conflict'])]),          // 衝突：不藏
+    mk('F000000007', [win(rec('2020-01-01', '2021-12-31', '5.00', 'initial'), null)]),                 // window 耗盡：不藏
+  ];
+  const p = prepareIndex(drugs);
+  return { p, mask: terminatedMask(p, T) };
+}
+
+test('篩選：只藏 T 當日確定為 0 元的品項；暫停／預告終止／衝突／耗盡不藏', () => {
+  const { p, mask } = filterIndex();
+  assert.deepEqual(p.drugs.filter((_, i) => mask[i]).map((d) => d.code), ['F000000002', 'F000000003']);
+  const r = search(p, 'filterine', mask);
+  assert.equal(r.total, 5);
+  assert.equal(r.hidden, 2);
+  assert.deepEqual(r.items.map((d) => d.code), ['F000000001', 'F000000004', 'F000000005', 'F000000006', 'F000000007']);
+  assert.equal(search(p, 'filterine').total, 7);                 // 不給遮罩＝全部顯示
+});
+
+test('篩選：代號完全相符一律顯示；前綴仍受篩選', () => {
+  const { p, mask } = filterIndex();
+  assert.deepEqual(search(p, 'F000000002', mask), { total: 1, hidden: 0, items: [p.drugs[1]] });
+  const pre = search(p, 'F00000000', mask);
+  assert.equal(pre.hidden, 2);
+  assert.ok(!pre.items.some((d) => d.code === 'F000000002'));
+});
+
+test('篩選：遮罩依日期而定（預告終止生效後才藏）', () => {
+  const { p } = filterIndex();
+  const mask = terminatedMask(p, '2026-10-01');
+  assert.equal(mask[p.drugs.findIndex((d) => d.code === 'F000000005')], true);
 });
 
 // ── A8／E6 分片與混批 ───────────────────────────────────────────
