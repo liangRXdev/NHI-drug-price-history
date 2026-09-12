@@ -331,6 +331,26 @@ def record_json(r, extra_flags=()):
     }
 
 
+def priced_before(records, target):
+    """target 之前（排序在前）最後一個 priced 金額；只看過去列，不受未來恢復支付影響。
+
+    搜尋卡只有 window，無法回看完整歷史：「終止→終止續期」（unchanged）的
+    previousPrice 依 §5.4 為 null，需此值才能顯示「終止前 X 元」，並判斷是否套用
+    「此前無有價紀錄」標籤（spec §5.3）。
+    """
+    last = None
+    for r in records:
+        if r is target:
+            return last
+        if r["priceState"] == "priced":
+            last = r["value"]
+    raise ValueError("target 不在 records 中")
+
+
+def window_json(records, r, extra_flags):
+    return {**record_json(r, extra_flags), "pricedBefore": _num(priced_before(records, r))}
+
+
 def invalid_json(r):
     return {"rawFrom": r["rawFrom"], "rawTo": r["rawTo"], "rawPrice": r["rawPrice"],
             "error": r["error"]}
@@ -362,7 +382,7 @@ def build_code(code, entry, build_date):
     index_entry = {
         "code": code,
         **{k: (meta_row[k] if meta_row else "") for k in INDEX_META_FIELDS},
-        "window": [record_json(r, extra) for r, extra in build_window(records, build_date)],
+        "window": [window_json(records, r, extra) for r, extra in build_window(records, build_date)],
         "historyCount": len(records) + len(invalid),
         "priceChangeCount": summary["priceChangeCount"],
         "firstEffectiveDate": records[0]["from"].isoformat() if records else None,

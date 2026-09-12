@@ -157,8 +157,9 @@ def test_conflicting_prices_in_same_interval():
 
 
 # ── A5 gap／overlap（閉區間、累計最大迄日）──────────────────────
-def interval_rows(*spans):
-    return [make_row(frm=roc(a), to=roc(b) if b else "9991231", price=f"{10 + i}.00")
+def interval_rows(*spans, prices=None):
+    return [make_row(frm=roc(a), to=roc(b) if b else "9991231",
+                     price=prices[i] if prices else f"{10 + i}.00")
             for i, (a, b) in enumerate(spans)]
 
 
@@ -220,6 +221,39 @@ def test_window_conflict_flag_when_multiple_current():
     rows = [make_row(price="10.00", frm="1150101"), make_row(price="12.00", frm="1150101")]
     window = build_window(records_of(rows), D)
     assert "conflict" in window[0][1]
+
+
+def window_of(rows, day=D):
+    by_code, _ = normalize_rows(rows)
+    return build_code(CODE, by_code[CODE], day)[1]["window"]
+
+
+def test_window_priced_before_survives_terminated_renewal():
+    # 10 → 0 → 0（終止後同為 0 元續期）：續期列 eventType=unchanged、previousPrice=null，
+    # 搜尋卡仍須拿得到「終止前 10 元」
+    rows = interval_rows((date(2020, 1, 1), date(2020, 12, 31)),
+                         (date(2021, 1, 1), date(2025, 12, 31)),
+                         (date(2026, 1, 1), None),
+                         prices=["10.00", "0.00", "0.00"])
+    [cur] = window_of(rows)
+    assert (cur["eventType"], cur["previousPrice"], cur["pricedBefore"]) == ("unchanged", None, 10.0)
+
+
+def test_window_priced_before_is_null_when_never_priced():
+    rows = interval_rows((date(2020, 1, 1), date(2025, 12, 31)), (date(2026, 1, 1), None),
+                         prices=["0.00", "0.00"])
+    assert window_of(rows)[0]["pricedBefore"] is None
+
+
+def test_window_priced_before_ignores_future_relisting():
+    # 10 → 終止（現行）→ 預告恢復 20：現行列的 pricedBefore 只能是 10，不得為 20
+    rows = interval_rows((date(2020, 1, 1), date(2025, 12, 31)),
+                         (date(2026, 1, 1), date(2026, 9, 30)),
+                         (date(2026, 10, 1), None),
+                         prices=["10.00", "0.00", "20.00"])
+    cur, upcoming = window_of(rows)
+    assert (cur["pricedBefore"], upcoming["pricedBefore"]) == (10.0, 10.0)
+    assert upcoming["eventType"] == "relisted"
 
 
 def test_index_metadata_comes_from_current_row_not_upcoming():
