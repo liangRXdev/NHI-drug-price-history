@@ -683,6 +683,7 @@ async function loadUpcoming({ force = false } = {}) {
   if (!force && u.phase === 'ready') return;
   const seq = ++state.upcomingSeq;
   state.upcomingInflight = true;
+  performance.mark('upcoming-fetch-start');          // U14 量測起點：點擊徽章那一刻
   state.upcoming = { ...u, phase: u.payload ? u.phase : 'loading', error: null, reason: null, updateFailed: null };
   renderUpcoming();
 
@@ -789,6 +790,11 @@ function renderUpcoming() {
         ${g.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('')}
       </section>`).join('')
     : model.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('');
+  // 終點＝版本驗證通過且完整清單已渲染（骨架可捲動不算，§8.1）
+  if (performance.getEntriesByName('upcoming-fetch-start').length) {
+    performance.measure('upcoming-fetch-to-rendered', 'upcoming-fetch-start');
+    performance.clearMarks('upcoming-fetch-start');
+  }
 }
 
 const UPCOMING_CONTROLS = { upType: 'type', upAtc: 'atc', upDate: 'date', upQ: 'q', upSort: 'sort' };
@@ -820,8 +826,10 @@ function writeUpcomingURL() {
 }
 
 function onUpcomingControl() {
+  const t0 = performance.now();
   writeUpcomingURL();
   renderUpcoming();
+  performance.measure('upcoming-rerender', { start: t0 });
 }
 
 let upcomingFrame = 0;
