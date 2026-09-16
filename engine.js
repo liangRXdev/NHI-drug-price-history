@@ -584,6 +584,17 @@ export const UPCOMING_META_FIELDS = ['chName', 'enName', 'ingredient', 'strength
 const UPCOMING_NULLABLE = ['endDate', 'price', 'previousPrice', 'pricedBefore',
   'previousState', 'absoluteChange', 'percentChange'];
 
+/**
+ * 真實日曆日（不只是外形）。`ISO_DATE` 只驗 `YYYY-MM-DD` 的樣子，`2027-02-30`
+ * 照樣通過；Python 端用 `date.fromisoformat()` 會拒絕，兩端不等價等於防線有洞。
+ */
+export function isCalendarDate(v) {
+  if (typeof v !== 'string' || !ISO_DATE.test(v)) return false;
+  const [y, m, d] = v.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 function validUpcomingRow(it, buildDate) {
   if (!isObj(it)) return false;
   if (typeof it.code !== 'string' || it.code === '') return false;
@@ -605,8 +616,8 @@ function validUpcomingRow(it, buildDate) {
   for (const k of ['previousPrice', 'pricedBefore', 'absoluteChange', 'percentChange']) {
     if (it[k] !== null && typeof it[k] !== 'number') return false;
   }
-  if (!ISO_DATE.test(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
-  if (it.endDate !== null && (!ISO_DATE.test(it.endDate) || it.endDate < it.effectiveDate)) return false;
+  if (!isCalendarDate(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
+  if (it.endDate !== null && (!isCalendarDate(it.endDate) || it.endDate < it.effectiveDate)) return false;
   return true;
 }
 
@@ -616,7 +627,7 @@ function validUpcomingRow(it, buildDate) {
  */
 export function validateUpcoming(payload, meta) {
   if (!isObj(payload) || typeof payload.dataVersion !== 'string'
-      || typeof payload.generatorVersion !== 'string' || !ISO_DATE.test(payload.buildDate ?? '')
+      || typeof payload.generatorVersion !== 'string' || !isCalendarDate(payload.buildDate)
       || !Number.isInteger(payload.count) || !Number.isInteger(payload.codeCount)
       || !Array.isArray(payload.items)) {
     return { ok: false, reason: 'invalid' };

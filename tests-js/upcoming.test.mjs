@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   upcomingDecision, validateUpcoming, upcomingPendingCount, UPCOMING_GENERATOR_VERSION,
-  upcomingParams, upcomingModel, upcomingCSV, csvField, UPCOMING_CSV_HEADER,
+  upcomingParams, upcomingModel, upcomingCSV, csvField, UPCOMING_CSV_HEADER, isCalendarDate,
 } from '../engine.js';
 
 const front = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_2026-09-11.json', import.meta.url), 'utf8'));
@@ -163,7 +163,7 @@ for (const [name, mutate, reason] of [
   ['endDate 早於 effectiveDate', (p) => { p.items[0].endDate = '2026-09-30'; }, 'invalid'],
   ['count 與 items 不符', (p) => { p.count = 99; }, 'invalid'],
   ['codeCount 與相異代號數不符', (p) => { p.codeCount = 99; }, 'invalid'],
-  ['buildDate 非合法日期', (p) => { p.buildDate = '2026-13-01'; }, 'invalid'],
+  ['buildDate 非合法日期', (p) => { p.buildDate = '2026-13-01'; p.items = []; p.count = 0; p.codeCount = 0; }, 'invalid'],
   ['items 不是陣列', (p) => { p.items = {}; }, 'invalid'],
   ['generatorVersion 不符', (p) => { p.generatorVersion = 'upcoming/0'; }, 'version_mismatch'],
   ['dataVersion 不符', (p) => { p.dataVersion = 'sha256:old'; }, 'version_mismatch'],
@@ -296,4 +296,31 @@ test('csvField 只在必要時加引號', () => {
   assert.equal(csvField('a,b'), '"a,b"');
   assert.equal(csvField('a"b'), '"a""b"');
   assert.equal(csvField('a\r\nb'), '"a\r\nb"');
+});
+
+// ── 日期合法性：與 Python validator 共用同一組案例（R4／T1）────────
+const DATE_CASES = JSON.parse(readFileSync(new URL('../tests/fixtures/dates.json', import.meta.url), 'utf8'));
+
+test('R4 日期驗證只接受真實日曆日，與 Python 端同判定', () => {
+  for (const v of DATE_CASES.legal) assert.equal(isCalendarDate(v), true, v);
+  for (const v of DATE_CASES.illegal) assert.equal(isCalendarDate(v), false, v);
+});
+
+for (const v of DATE_CASES.illegal) {
+  test(`T1 拒絕非法 effectiveDate：${JSON.stringify(v)}`, () => {
+    // 生效日改成非法值，但 buildDate 維持 2026-09-11：若只比字串大小，
+    // '2027-02-30' > '2026-09-11' 會通過——必須是日曆驗證擋下來的
+    const p = payload({}, (x) => { x.items[0].effectiveDate = v; });
+    assert.deepEqual(validateUpcoming(p, META), { ok: false, reason: 'invalid' });
+  });
+
+  test(`T1 拒絕非法 buildDate：${JSON.stringify(v)}`, () => {
+    const p = payload({ items: [] }, (x) => { x.buildDate = v; });
+    assert.deepEqual(validateUpcoming(p, META), { ok: false, reason: 'invalid' });
+  });
+}
+
+test('T1 反向哨兵：合法但晚於 buildDate 的日期仍須通過', () => {
+  const p = payload({}, (x) => { x.items[0].effectiveDate = '2028-02-29'; });
+  assert.deepEqual(validateUpcoming(p, META), { ok: true });
 });

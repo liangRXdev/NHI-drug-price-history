@@ -290,3 +290,35 @@ def test_validator_rejects(mutate, fragment):
     mutate(payload)
     errors = history.validate_upcoming(payload)
     assert errors and any(fragment in m for m in errors), errors
+
+
+# ── 日期合法性：與 JS validator 共用同一組案例（R4／T1）────────────
+DATE_CASES = json.loads((ROOT / "tests" / "fixtures" / "dates.json").read_text(encoding="utf-8"))
+
+
+def test_date_validator_accepts_only_real_calendar_days():
+    """`YYYY-MM-DD` 外形 ＋ 真實日曆日；基本格式 20260911 不收。
+
+    tests-js/upcoming.test.mjs 以同一份 fixture 驗 JS 端，兩端判定必須一致。
+    """
+    for value in DATE_CASES["legal"]:
+        assert history._is_iso_date(value) is True, value
+    for value in DATE_CASES["illegal"]:
+        assert history._is_iso_date(value) is False, value
+
+
+@pytest.mark.parametrize("value", DATE_CASES["illegal"])
+def test_validator_rejects_illegal_effective_date(value):
+    payload = valid_payload()
+    payload["items"] = payload["items"][:1]
+    payload["count"], payload["codeCount"] = 1, 1
+    payload["items"][0]["effectiveDate"] = value
+    assert any("effectiveDate" in m for m in history.validate_upcoming(payload))
+
+
+@pytest.mark.parametrize("value", DATE_CASES["illegal"])
+def test_validator_rejects_illegal_build_date(value):
+    payload = valid_payload()
+    payload["items"], payload["count"], payload["codeCount"] = [], 0, 0
+    payload["buildDate"] = value
+    assert any("buildDate" in m for m in history.validate_upcoming(payload))
