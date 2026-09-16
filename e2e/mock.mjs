@@ -29,7 +29,9 @@ export function buildData() {
     source: 'NHIA A21030000I-E41001-001',
   };
   const index = { dataVersion: DATA_VERSION, drugs: [...Object.values(structuredClone(front.index)), ...FILLER] };
-  return { meta, index, shards };
+  // 預告清單同樣由 Python 生成器產出（golden fixture 的 upcoming 區塊），只換資料版本
+  const upcoming = { ...structuredClone(front.upcoming), dataVersion: DATA_VERSION };
+  return { meta, index, shards, upcoming };
 }
 
 /** lastCheckedAt 為 today（+08:00）往前 days 天。 */
@@ -54,6 +56,8 @@ const json = (route, body, delay = 0) => new Promise((ok) => setTimeout(ok, dela
  *   index/meta   '404'｜'corrupt'｜物件覆寫
  *   indexDelay   index 延遲毫秒
  *   shard        (prefix, attempt, route, data) => 自訂處理；回傳 false 走預設
+ *   upcoming     '404'｜'corrupt'｜'pending'｜'network'｜HTTP 狀態碼｜物件覆寫；給陣列則依請求次數逐一套用
+ *   upcomingDelay  upcoming 延遲毫秒
  */
 export async function mockSite(page, opts = {}) {
   const today = opts.today || '2026-09-11';
@@ -77,6 +81,17 @@ export async function mockSite(page, opts = {}) {
     if (path === 'drug_index.json') {
       return special(opts.index) ?? json(route, typeof opts.index === 'object' ? opts.index : data.index, opts.indexDelay || 0);
     }
+    if (path === 'upcoming.json') {
+      attempts.upcoming = (attempts.upcoming || 0) + 1;
+      const v = Array.isArray(opts.upcoming)
+        ? opts.upcoming[Math.min(attempts.upcoming, opts.upcoming.length) - 1]
+        : opts.upcoming;
+      if (v === 'pending') return new Promise(() => {});
+      if (v === 'network') return route.abort('failed');
+      if (typeof v === 'number') return route.fulfill({ status: v, body: 'server error' });
+      return special(v) ?? json(route, typeof v === 'object' && v !== null ? v : data.upcoming,
+        opts.upcomingDelay || 0);
+    }
     const m = /^history\/([^/]+)\.json$/.exec(path);
     if (m) {
       const prefix = decodeURIComponent(m[1]);
@@ -90,4 +105,23 @@ export async function mockSite(page, opts = {}) {
     return route.fulfill({ status: 404, body: 'not found' });
   });
   return { data, calls, attempts, json };
+}
+
+// ── 預告清單的合成資料（§9.1：多數規則在真實資料裡零實例）──────────
+export function upcomingItem(o = {}) {
+  return {
+    code: 'T000000100', chName: '測試藥', enName: 'TEST TAB', ingredient: 'TESTINE',
+    strength: '10', strengthUnit: 'MG', dosageForm: '錠劑', atcCode: 'A01AA01',
+    manufacturer: '測試藥廠', effectiveDate: '2026-10-01', endDate: null,
+    eventType: 'initial', priceState: 'terminated', price: null, rawPrice: '0.00',
+    previousPrice: null, pricedBefore: null, previousState: null, absoluteChange: null,
+    percentChange: null, crossesStop: false, everPriced: false, flags: [], ...o,
+  };
+}
+
+export function upcomingPayload(items, buildDate = '2026-09-11') {
+  return {
+    dataVersion: DATA_VERSION, generatorVersion: 'upcoming/1', buildDate,
+    count: items.length, codeCount: new Set(items.map((i) => i.code)).size, items,
+  };
 }

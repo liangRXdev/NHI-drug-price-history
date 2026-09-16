@@ -7,6 +7,11 @@
 - §6.1 invalidRecords    → normalize_rows()
 - §6.3／§6.4 衝突、重疊、空窗 → annotate_flags()
 - §6.6 描述欄位選列      → select_meta_row()、meta_payload()
+
+預告清單（spec-upcoming.md）：
+- §3.1 預告列組成        → build_upcoming()
+- §3.2 排序契約          → sort_upcoming()
+- §5.5.1 合法性判準      → validate_upcoming()
 """
 
 from collections import defaultdict
@@ -392,3 +397,178 @@ def build_code(code, entry, build_date):
         "flags": sorted(flags),
     }
     return shard_entry, index_entry, flags
+
+
+# ── 預告清單（spec-upcoming.md §3、§5.5.1）──────────────────────
+# 生成規則版本。規則修正時遞增：dataVersion 只依來源內容，同一份來源在規則變更
+# 前後的 dataVersion 相同，前端無從分辨新舊產物（spec-upcoming §3.3.2）。
+UPCOMING_GENERATOR_VERSION = "upcoming/1"
+
+PRICE_STATES = frozenset({"priced", "terminated", "suspended", "missing", "malformed"})
+EVENT_TYPES = frozenset({"initial", "unknown", "unchanged", "terminated", "suspended",
+                         "increase", "decrease", "relisted", "first_priced"})
+UPCOMING_NULLABLE = ("endDate", "price", "previousPrice", "pricedBefore",
+                     "previousState", "absoluteChange", "percentChange")
+UPCOMING_ROW_FIELDS = (("code", str), ("effectiveDate", str), ("priceState", str),
+                       ("eventType", str), ("rawPrice", str), ("everPriced", bool),
+                       ("flags", list))
+
+
+def build_upcoming(code, entry, build_date, code_flags):
+    """spec-upcoming §3.1：該代號 `from > build_date` 的 record → 預告列。
+
+    必須在 annotate_flags()／derive_events() 之後呼叫：事件欄位一律直接取用
+    record 既有值，不重算，避免與詳細頁形成雙重真相。
+
+    描述欄位依 §6.6 以 build 日選列，**不得**以預告列本身回填（`BC26467100`
+    預告列成分欄損毀前例）；只有未來列的代號取不到列 → 一律 null（§5.5.1
+    的「合法缺值」，前端顯示「—」）。
+    """
+    records = entry["records"]
+    meta_row = select_meta_row(records, build_date)
+    items = []
+    for i, r in enumerate(records):
+        if r["from"] <= build_date:
+            continue
+        before = priced_before(records, r)     # 狀態語意，與 previousPrice（事件語意）並存
+        items.append({
+            "code": code,
+            **{k: (meta_row[k] if meta_row else None) for k in INDEX_META_FIELDS},
+            "effectiveDate": r["from"].isoformat(),
+            "endDate": r["to"].isoformat() if r["to"] else None,
+            "eventType": r["eventType"],
+            "priceState": r["priceState"],
+            "price": _num(r["value"]),
+            "rawPrice": r["rawPrice"],
+            "previousPrice": _num(r["previousPrice"]),
+            "pricedBefore": _num(before),
+            "previousState": records[i - 1]["priceState"] if i else None,
+            "absoluteChange": _num(r["absoluteChange"]),
+            "percentChange": _num(r["percentChange"]),
+            "crossesStop": r["crossesStop"],
+            "everPriced": before is not None,
+            "flags": sorted(set(r["flags"]) | set(code_flags)),
+        })
+    return items
+
+
+def sort_upcoming(items):
+    """spec-upcoming §3.2：effectiveDate asc → eventType asc → code asc → 原 records 索引。
+
+    第四鍵靠 stable sort 保證，呼叫端須依代號排序、代號內依 records 順序附加；
+    少了它，同代號同日同事件的多列會隨來源列順序改變而破壞 determinism。
+    """
+    return sorted(items, key=lambda it: (it["effectiveDate"], it["eventType"], it["code"]))
+
+
+def _is_iso_date(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def validate_upcoming(payload, *, generator_version=UPCOMING_GENERATOR_VERSION):
+    """spec-upcoming §5.5.1 合法性判準 → 錯誤訊息清單（空清單＝合法）。
+
+    前端 engine.js 須實作等價規則。任一列不合法即**整份**視為損毀：靜默跳過
+    壞列會讓使用者看到一份看起來完整、其實缺項的清單。
+    """
+    errors = []
+    if not isinstance(payload, dict):
+        return ["upcoming 不是物件"]
+
+    for key, kind in (("dataVersion", str), ("generatorVersion", str),
+                      ("buildDate", str), ("count", int), ("codeCount", int)):
+        value = payload.get(key)
+        if not isinstance(value, kind) or isinstance(value, bool):
+            errors.append(f"{key} 缺漏或型別錯誤：{value!r}")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        errors.append(f"items 不是陣列：{type(items).__name__}")
+        return errors
+    if errors:
+        return errors
+
+    if payload["generatorVersion"] != generator_version:
+        errors.append(f"generatorVersion {payload['generatorVersion']!r} "
+                      f"≠ 期望值 {generator_version!r}")
+    build_date = payload["buildDate"]
+    if not _is_iso_date(build_date):
+        errors.append(f"buildDate 非合法 ISO date：{build_date!r}")
+        build_date = None
+    if payload["count"] != len(items):
+        errors.append(f"count {payload['count']} ≠ items 長度 {len(items)}")
+    codes = {it.get("code") for it in items if isinstance(it, dict)}
+    if payload["codeCount"] != len(codes):
+        errors.append(f"codeCount {payload['codeCount']} ≠ 相異 code 數 {len(codes)}")
+
+    for i, item in enumerate(items):
+        errors.extend(f"items[{i}] {m}" for m in _upcoming_row_errors(item, build_date))
+    return errors
+
+
+def _upcoming_row_errors(item, build_date):
+    if not isinstance(item, dict):
+        return [f"不是物件：{type(item).__name__}"]
+    errors = []
+
+    for key, kind in UPCOMING_ROW_FIELDS:
+        value = item.get(key)
+        if not isinstance(value, kind) or (kind is not bool and isinstance(value, bool)):
+            errors.append(f"{key} 缺漏或型別錯誤：{value!r}")
+    for key in UPCOMING_NULLABLE + INDEX_META_FIELDS:
+        if key not in item:
+            errors.append(f"缺少 {key}")
+    if not isinstance(item.get("crossesStop"), bool):
+        errors.append(f"crossesStop 缺漏或型別錯誤：{item.get('crossesStop')!r}")
+    for key in INDEX_META_FIELDS:
+        value = item.get(key)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{key} 須為字串或 null：{value!r}")
+    if errors:
+        return errors
+
+    if not item["code"]:
+        errors.append("code 為空字串")
+    if item["priceState"] not in PRICE_STATES:
+        errors.append(f"priceState 非合法值：{item['priceState']!r}")
+    if item["eventType"] not in EVENT_TYPES:
+        errors.append(f"eventType 非合法值：{item['eventType']!r}")
+    if item["previousState"] is not None and item["previousState"] not in PRICE_STATES:
+        errors.append(f"previousState 非合法值：{item['previousState']!r}")
+
+    # 狀態與價格一致性：priced ⟺ price 為正數。缺了這條，`priced + null`、
+    # `terminated + 正數` 都能通過字面檢查（plan-verdict-r2 F3）
+    price = item["price"]
+    if item["priceState"] == "priced":
+        if not isinstance(price, (int, float)) or isinstance(price, bool) or price <= 0:
+            errors.append(f"priceState=priced 但 price 不是正數：{price!r}")
+    elif price is not None:
+        errors.append(f"priceState={item['priceState']} 但 price 非 null：{price!r}")
+
+    if item["everPriced"] != (item["pricedBefore"] is not None):
+        errors.append(f"everPriced {item['everPriced']} 與 pricedBefore "
+                      f"{item['pricedBefore']!r} 不一致")
+    for key in ("previousPrice", "pricedBefore", "absoluteChange", "percentChange"):
+        value = item[key]
+        if value is not None and (not isinstance(value, (int, float))
+                                  or isinstance(value, bool)):
+            errors.append(f"{key} 須為數值或 null：{value!r}")
+
+    if not _is_iso_date(item["effectiveDate"]):
+        errors.append(f"effectiveDate 非合法 ISO date：{item['effectiveDate']!r}")
+    elif build_date is not None and item["effectiveDate"] <= build_date:
+        errors.append(f"effectiveDate {item['effectiveDate']} 未晚於 buildDate {build_date}")
+    end = item["endDate"]
+    if end is not None:
+        if not _is_iso_date(end):
+            errors.append(f"endDate 非合法 ISO date：{end!r}")
+        elif _is_iso_date(item["effectiveDate"]) and end < item["effectiveDate"]:
+            errors.append(f"endDate {end} 早於 effectiveDate {item['effectiveDate']}")
+    if any(not isinstance(f, str) for f in item["flags"]):
+        errors.append(f"flags 含非字串元素：{item['flags']!r}")
+    return errors

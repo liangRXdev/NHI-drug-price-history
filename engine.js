@@ -10,6 +10,10 @@
 //   §8.6 過期警示          → staleness()
 //   §7／§8.7 分片與混批    → shardPrefix()、validate*()
 //
+// 規則對應 spec-upcoming.md：
+//   §5.5.1 預告清單合法性   → validateUpcoming()
+//   §5.1 徽章數字（依 T）   → upcomingPendingCount()
+//
 // 日期一律為 ISO 'YYYY-MM-DD' 字串（字典序即時間序）；有效區間為閉區間 [from, to]，to=null 為無迄日。
 
 export const MAX_RESULTS = 50;
@@ -566,3 +570,322 @@ export function niceTicks(min, max, n = 5) {
   for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) ticks.push(+v.toFixed(10));
   return ticks;
 }
+
+// ── 預告中心（spec-upcoming.md）──────────────────────────────────
+// 前端內建的期望生成規則版本。dataVersion 只依來源內容，同一份來源在規則變更
+// 前後的 dataVersion 相同，少了這個欄位就分不出舊規則產物（§3.3.2）。
+export const UPCOMING_GENERATOR_VERSION = 'upcoming/1';
+
+const PRICE_STATES = new Set(['priced', 'terminated', 'suspended', 'missing', 'malformed']);
+const EVENT_TYPES = new Set(['initial', 'unknown', 'unchanged', 'terminated', 'suspended',
+  'increase', 'decrease', 'relisted', 'first_priced']);
+export const UPCOMING_META_FIELDS = ['chName', 'enName', 'ingredient', 'strength',
+  'strengthUnit', 'dosageForm', 'atcCode', 'manufacturer'];
+const UPCOMING_NULLABLE = ['endDate', 'price', 'previousPrice', 'pricedBefore',
+  'previousState', 'absoluteChange', 'percentChange'];
+
+function validUpcomingRow(it, buildDate) {
+  if (!isObj(it)) return false;
+  if (typeof it.code !== 'string' || it.code === '') return false;
+  if (typeof it.rawPrice !== 'string' || typeof it.everPriced !== 'boolean'
+      || typeof it.crossesStop !== 'boolean' || !Array.isArray(it.flags)) return false;
+  if (it.flags.some((f) => typeof f !== 'string')) return false;
+  if (!PRICE_STATES.has(it.priceState) || !EVENT_TYPES.has(it.eventType)) return false;
+  // 描述欄位允許 null（只有未來列的代號），但不得省略鍵——省略等於分不出「來源沒有」
+  // 與「產生器漏寫」（§5.5.1 合法缺值）
+  for (const k of UPCOMING_META_FIELDS) {
+    if (!(k in it) || (it[k] !== null && typeof it[k] !== 'string')) return false;
+  }
+  for (const k of UPCOMING_NULLABLE) if (!(k in it)) return false;
+  if (it.previousState !== null && !PRICE_STATES.has(it.previousState)) return false;
+  // 狀態與價格一致性：priced ⟺ price 為正數
+  if (it.priceState === 'priced' ? !(typeof it.price === 'number' && it.price > 0)
+    : it.price !== null) return false;
+  if (it.everPriced !== (it.pricedBefore !== null)) return false;
+  for (const k of ['previousPrice', 'pricedBefore', 'absoluteChange', 'percentChange']) {
+    if (it[k] !== null && typeof it[k] !== 'number') return false;
+  }
+  if (!ISO_DATE.test(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
+  if (it.endDate !== null && (!ISO_DATE.test(it.endDate) || it.endDate < it.effectiveDate)) return false;
+  return true;
+}
+
+/**
+ * spec-upcoming §5.5.1：→ { ok, reason }。reason 'version_mismatch'｜'invalid'。
+ * **任一列不合法即整份損毀**：靜默跳過壞列會讓使用者看到一份看起來完整、其實缺項的清單。
+ */
+export function validateUpcoming(payload, meta) {
+  if (!isObj(payload) || typeof payload.dataVersion !== 'string'
+      || typeof payload.generatorVersion !== 'string' || !ISO_DATE.test(payload.buildDate ?? '')
+      || !Number.isInteger(payload.count) || !Number.isInteger(payload.codeCount)
+      || !Array.isArray(payload.items)) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (payload.generatorVersion !== UPCOMING_GENERATOR_VERSION) {
+    return { ok: false, reason: 'version_mismatch' };
+  }
+  if (!meta || typeof meta.dataVersion !== 'string') return { ok: false, reason: 'version_mismatch' };
+  if (payload.dataVersion !== meta.dataVersion) return { ok: false, reason: 'version_mismatch' };
+  // count／codeCount 比對的是原始完整 items，不是經 T、篩選或去重後的集合
+  if (payload.count !== payload.items.length) return { ok: false, reason: 'invalid' };
+  if (payload.codeCount !== new Set(payload.items.map((it) => (isObj(it) ? it.code : it))).size) {
+    return { ok: false, reason: 'invalid' };
+  }
+  for (const it of payload.items) {
+    if (!validUpcomingRow(it, payload.buildDate)) return { ok: false, reason: 'invalid' };
+  }
+  return { ok: true };
+}
+
+/** 依瀏覽器日期 T 計算徽章數字：只算仍未生效的列（§5.1）。 */
+export function upcomingPendingCount(items, T) {
+  return items.reduce((n, it) => n + (it.effectiveDate > T ? 1 : 0), 0);
+}
+
+/**
+ * 預告列的呈現決策（spec-upcoming §4.1）：**由上而下取第一個符合的規則**。
+ * → { rule, label, sub, type }；rule 為 §4.1 序號，type 為 §4.1.1 的篩選分類。
+ *
+ * 主鍵是 priceState ＋ 該列之前有無 priced，不是 eventType：首列即 0 元的代號
+ * 事件是 initial，用 eventType 當索引鍵會讓它沒有任何標籤可用（plan-verdict-upcoming H1）。
+ * 序 14 是安全網：任何未預期組合一律落到「無法判定」，不得靜默顯示成確定的價格事件。
+ */
+export function upcomingDecision(it) {
+  const d = it.effectiveDate;
+  const Y = it.rawPrice;
+  const before = fmtMoney(it.pricedBefore);          // X：停止前最後一個有價金額
+  const prev = fmtMoney(it.previousPrice);           // X：priced 列的前一筆有價金額
+  const pct = it.percentChange === null ? '' : `（${fmtPct(it.percentChange)}`;
+
+  if ((it.flags || []).includes('conflicting_price_interval') || it.eventType === 'unknown') {
+    return { rule: 1, label: '無法判定', sub: '來源資料異常，請開啟詳細頁確認', type: 'other' };
+  }
+  if (it.priceState === 'malformed') {
+    return { rule: 2, label: '資料格式異常', sub: `${d} 起（原始值：${Y}）`, type: 'other' };
+  }
+  if (it.priceState === 'missing') {
+    return { rule: 3, label: '來源無支付價資料', sub: `${d} 起；請開啟詳細頁確認`, type: 'other' };
+  }
+  if (it.priceState === 'terminated') {
+    // 此前無有價紀錄者不得出現「終止」字樣（spec.md §5.3 首列 0 元例外）
+    if (!it.everPriced) {
+      return { rule: 4, label: '健保支付價 0 元', sub: `${d} 起（此前無有價紀錄）`, type: 'first_priced' };
+    }
+    if (it.previousState === 'terminated') {
+      return { rule: 5, label: '終止支付續期', sub: `${d} 起仍為 0 元；終止前 ${before} 元`, type: 'terminated' };
+    }
+    return { rule: 6, label: '終止支付', sub: `${d} 起；終止前 ${before} 元`, type: 'terminated' };
+  }
+  if (it.priceState === 'suspended') {
+    if (!it.everPriced) {
+      return { rule: 7, label: '暫停支付', sub: `${d} 起（此前無有價紀錄，來源標示「${Y}」）`, type: 'first_priced' };
+    }
+    if (it.previousState === 'suspended') {
+      return { rule: 8, label: '暫停支付續期', sub: `${d} 起仍為暫停；暫停前 ${before} 元`, type: 'suspended' };
+    }
+    return { rule: 9, label: '暫停支付', sub: `${d} 起；暫停前 ${before} 元（來源標示「${Y}」）`, type: 'suspended' };
+  }
+  if (it.priceState === 'priced') {
+    if (!it.everPriced) return { rule: 10, label: '首次有價', sub: `${d} 起 ${Y} 元`, type: 'first_priced' };
+    if (it.previousState === 'terminated' || it.previousState === 'suspended') {
+      // relisted 的差額與百分比在 record 上已有值，必須呈現，不得只顯示新價（§4.2）
+      return {
+        rule: 11,
+        label: '恢復支付',
+        sub: `${d} 起 ${before} → ${Y} 元${pct ? `${pct}，跨越停止期間）` : '（跨越停止期間）'}`,
+        type: 'relisted',
+      };
+    }
+    if (it.previousState === 'priced' && it.previousPrice !== null) {
+      if (it.price === it.previousPrice) {
+        return { rule: 12, label: '續期（支付價不變）', sub: `${d} 起 ${Y} 元，與前期相同`, type: 'unchanged' };
+      }
+      const up = it.price > it.previousPrice;
+      return {
+        rule: 13,
+        label: up ? '調升' : '調降',
+        sub: `${d} 起 ${prev} → ${Y} 元${pct ? `${pct}）` : ''}`,
+        type: up ? 'increase' : 'decrease',
+      };
+    }
+  }
+  return { rule: 14, label: '無法判定', sub: '來源資料異常，請開啟詳細頁確認', type: 'other' };
+}
+
+/** §5.3 篩選的 type 值域（§4.1.1 的完整映射結果）。 */
+export const UPCOMING_TYPES = ['all', 'decrease', 'increase', 'terminated', 'suspended',
+  'relisted', 'first_priced', 'unchanged', 'other'];
+
+// ── 預告清單的篩選、排序與分組（spec-upcoming §5.3）──────────────
+export const UPCOMING_SORTS = ['date_asc', 'date_desc', 'change_desc'];
+const ATC_LETTER = /^[A-V]$/;
+
+/** 本份清單中實際出現的 ATC 首字母（升冪）；篩選值必須存在於清單中才算合法。 */
+export function upcomingAtcLetters(items) {
+  const set = new Set();
+  for (const it of items) {
+    const c = (it.atcCode || '').charAt(0).toUpperCase();
+    if (ATC_LETTER.test(c)) set.add(c);
+  }
+  return [...set].sort();
+}
+
+/** 本份清單中的批次日（升冪）。`date` 的語意是精確批次，不是區間起點。 */
+export function upcomingDates(items) {
+  return [...new Set(items.map((it) => it.effectiveDate))].sort();
+}
+
+/** URL 參數 → 篩選狀態；無效值一律回預設且不報錯（§5.3）。 */
+export function upcomingParams(search, items) {
+  const p = search instanceof URLSearchParams ? search : new URLSearchParams(search);
+  const type = UPCOMING_TYPES.includes(p.get('type')) ? p.get('type') : 'all';
+  const atc = upcomingAtcLetters(items).includes(p.get('atc')) ? p.get('atc') : '';
+  const date = upcomingDates(items).includes(p.get('date')) ? p.get('date') : '';
+  const sort = UPCOMING_SORTS.includes(p.get('sort')) ? p.get('sort') : 'date_asc';
+  return { type, atc, date, sort, q: (p.get('q') || '').slice(0, 100) };
+}
+
+function matchesQuery(it, q) {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return [it.code, it.chName, it.enName, it.ingredient]
+    .some((v) => typeof v === 'string' && v.toLowerCase().includes(needle));
+}
+
+function sortRows(rows, sort) {
+  const out = [...rows];                       // 來源順序已是 §3.2 的 date→event→code→索引
+  if (sort === 'date_desc') {
+    out.sort((a, b) => (a.it.effectiveDate < b.it.effectiveDate ? 1 : a.it.effectiveDate > b.it.effectiveDate ? -1 : 0));
+  } else if (sort === 'change_desc') {
+    // 幅度取絕對值（−30% 與 +30% 同級）；無 percentChange 者一律置底，不得視為 0%
+    const mag = (r) => (typeof r.it.percentChange === 'number' ? Math.abs(r.it.percentChange) : null);
+    out.sort((a, b) => {
+      const [x, y] = [mag(a), mag(b)];
+      if (x !== y) {
+        if (x === null) return 1;
+        if (y === null) return -1;
+        return y - x;
+      }
+      if (a.it.effectiveDate !== b.it.effectiveDate) return a.it.effectiveDate < b.it.effectiveDate ? -1 : 1;
+      return a.it.code < b.it.code ? -1 : a.it.code > b.it.code ? 1 : 0;
+    });
+  }
+  return out;
+}
+
+/**
+ * → { total, rows, groups }。total 為**篩選前**的總列數（空結果的提示要用它）。
+ * groups 為 null 表示不分組：「幅度 desc」時分組會把最大變動切散在各批次裡（§5.3）。
+ */
+export function upcomingModel(items, params) {
+  const decorated = items.map((it) => ({ it, dec: upcomingDecision(it) }));
+  const matched = decorated.filter(({ it, dec }) => (
+    (params.type === 'all' || dec.type === params.type)
+    && (!params.atc || (it.atcCode || '').toUpperCase().startsWith(params.atc))
+    && (!params.date || it.effectiveDate === params.date)
+    && matchesQuery(it, params.q)
+  ));
+  const rows = sortRows(matched, params.sort);
+  let groups = null;
+  if (params.sort !== 'change_desc') {
+    groups = [];
+    for (const row of rows) {
+      const last = groups[groups.length - 1];
+      if (last && last.date === row.it.effectiveDate) last.rows.push(row);
+      else groups.push({ date: row.it.effectiveDate, rows: [row] });
+    }
+  }
+  return { total: items.length, rows, groups };
+}
+
+// ── 預告清單 CSV 匯出（spec-upcoming §5.4）──────────────────────
+export const UPCOMING_CSV_HEADER = ['生效日', '代號', '中文品名', '英文品名', '成分', '規格',
+  '劑型', 'ATC', '藥商', '事件', '變動前支付價', '變動後支付價', '差額', '變動%',
+  '原始支付價字串', '備註'];
+
+const CRLF = '\r\n';
+
+/** RFC 4180：含逗號、引號、換行者加引號，內部引號重複一次。其餘逐字輸出。 */
+export function csvField(value) {
+  const s = value === null || value === undefined ? '' : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+const csvRow = (fields) => fields.map(csvField).join(',');
+
+const TYPE_TEXT = {
+  all: '全部', decrease: '調降', increase: '調升', terminated: '終止支付',
+  suspended: '暫停支付', relisted: '恢復支付', first_priced: '首次有價／0 元',
+  unchanged: '續期（支付價不變）', other: '無法判定／資料異常',
+};
+const SORT_TEXT = { date_asc: '生效日近→遠', date_desc: '生效日遠→近', change_desc: '變動幅度大→小' };
+
+export function describeUpcomingFilters(p) {
+  const parts = [`事件型別＝${TYPE_TEXT[p.type] || p.type}`];
+  if (p.atc) parts.push(`ATC＝${p.atc}`);
+  if (p.date) parts.push(`生效日＝${p.date}`);
+  if (p.q) parts.push(`關鍵字＝${p.q}`);
+  parts.push(`排序＝${SORT_TEXT[p.sort] || p.sort}`);
+  return parts.join('，');
+}
+
+/** 變動前支付價（§4.2）：停止狀態取該列之前最後一個有價金額，有價列取前一筆有價金額。 */
+function priorAmount(it) {
+  return it.priceState === 'priced' ? it.previousPrice : it.pricedBefore;
+}
+
+/**
+ * → CSV 字串（含 BOM、CRLF、前言一行＋標頭一行）。匯出的是**目前篩選後**的結果。
+ * `rows` 為 upcomingModel() 的 rows（帶 dec），順序與畫面一致。
+ */
+export function upcomingCSV(rows, { buildDate, params, today, staleNote = '' }) {
+  const preamble = '健保藥價歷史查詢 — 預告清單匯出。'
+    + '資料來源：中央健康保險署「健保用藥品項查詢項目檔」（A21030000I-E41001-001）。'
+    + `資料產生日 ${buildDate}；檢視日期 ${today}；篩選條件：${describeUpcomingFilters(params)}。`
+    + (staleNote ? `${staleNote}。` : '')
+    + '本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。'
+    + '預告內容以健保署最新公告為準。';
+
+  const lines = [csvRow([preamble]), csvRow(UPCOMING_CSV_HEADER)];
+  for (const { it, dec } of rows) {
+    const notes = [];
+    if (it.effectiveDate <= today) notes.push('已生效（本站資料尚未重建）');
+    for (const f of it.flags || []) notes.push(UPCOMING_FLAG_TEXT[f] || f);
+    lines.push(csvRow([
+      it.effectiveDate,
+      it.code,
+      it.chName,
+      it.enName,
+      it.ingredient,
+      [it.strength, it.strengthUnit].filter(Boolean).join(' '),
+      it.dosageForm,
+      it.atcCode,
+      it.manufacturer,
+      dec.label,
+      fmtAmount(priorAmount(it)),
+      fmtAmount(it.price),
+      fmtAmount(it.absoluteChange),
+      fmtAmount(it.percentChange),
+      it.rawPrice,                       // 逐字輸出：12.50 不得變成 12.5、0.00 不得變成 0
+      notes.join('；'),
+    ]));
+  }
+  return `﻿${lines.join(CRLF)}${CRLF}`;
+}
+
+/** CSV 內的金額一律用 ASCII 負號與 2 位小數；null 輸出空欄。 */
+function fmtAmount(x) {
+  if (x === null || x === undefined) return '';
+  const two = x.toFixed(2);
+  return Number(two) === x ? two : String(x);
+}
+
+export const UPCOMING_FLAG_TEXT = {
+  gap: '有支付空窗',
+  overlap: '來源區間重疊',
+  conflict: '來源紀錄衝突',
+  conflicting_price_interval: '同期間有不同支付價',
+  invalid_records: '含日期異常紀錄',
+  question_mark: '品名含「?」（來源缺字）',
+  inconsistent_metadata: '描述欄位不一致',
+};

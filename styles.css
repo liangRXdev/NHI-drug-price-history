@@ -37,6 +37,8 @@
 }
 
 * { box-sizing: border-box; }
+/* display 規則會蓋掉 hidden 屬性的預設 display:none（#upcomingControls 為 flex） */
+[hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg-primary);
   font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
@@ -191,11 +193,50 @@ table.history .cell-state { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 
 .loading { font-size: 0.85rem; color: var(--text-muted); }
 
+/* 預告中心（spec-upcoming.md §5.2）
+   徽章：白字 on --accent-hover ＝ 6.00:1（2026-09-16 實算），過 AA */
+.site-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.site-header-main { flex: 1 1 18rem; }
+.upcoming-badge {
+  flex: 0 0 auto; display: inline-block; margin-top: 0.2rem;
+  background: var(--accent-hover); color: #fff; text-decoration: none;
+  border-radius: 999px; padding: 0.3rem 0.9rem; font-size: 0.85rem; font-weight: 500;
+  white-space: nowrap;
+}
+.upcoming-badge:hover { background: var(--accent); }
+.upcoming-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.upcoming-head .hint { margin: 0; }
+#upcomingBanner:not(:empty) { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.8rem; }
+.upcoming-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+.upcoming-row {
+  border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem; background: var(--bg-card);
+}
+.upcoming-row[data-expired] { border-color: #FFCC80; background: #FFFBF5; }
+.skeleton {
+  height: 4.5rem; border-radius: 6px; border: 1px solid var(--border);
+  background: linear-gradient(90deg, #F2EFEA 25%, #FAF8F4 50%, #F2EFEA 75%);
+  background-size: 200% 100%; animation: skeleton 1.2s linear infinite;
+}
+@keyframes skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+.upcoming-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: flex-end; margin: 0.7rem 0 0.2rem; font-size: 0.8rem; }
+.upcoming-controls label { display: flex; flex-direction: column; gap: 0.2rem; color: var(--text-muted); }
+.upcoming-controls select, .upcoming-controls input {
+  font: inherit; color: var(--text-primary); background: #fff;
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.4rem;
+}
+.upcoming-controls button { align-self: flex-end; padding: 0.35rem 0.7rem; }
+.upcoming-group h3 { font-size: 0.9rem; margin: 1.1rem 0 0.4rem; padding-bottom: 0.25rem; border-bottom: 2px solid var(--accent); }
+.upcoming-group:first-child h3 { margin-top: 0.4rem; }
+.upcoming-group .upcoming-row + .upcoming-row { margin-top: 0.5rem; }
+
 @media (max-width: 480px) {
   .wrap { padding: 1rem 0.75rem 3rem; }
   .card { padding: 1rem 0.85rem 1.2rem; }
   .metric.key { grid-column: auto; }
   .results { grid-template-columns: 1fr; }
+  .upcoming-badge { margin-top: 0.5rem; }
+  .upcoming-controls label { flex: 1 1 8rem; }
   .facts { grid-template-columns: 1fr; }
   .facts dt { margin-top: 0.3rem; }
   table.history { font-size: 0.78rem; }

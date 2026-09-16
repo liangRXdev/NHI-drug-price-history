@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -11,7 +12,7 @@ import requests
 
 import build_price_history as bph
 from build_price_history import BuildError, GuardConfig, check_guards, gzip_size, run
-from lib import nhi
+from lib import history, nhi
 from tests.helpers import HEADER, SNAPSHOT, make_row, rows_to_csv, tree_hash
 
 CHECKED = "2026-09-11T12:00:00+08:00"
@@ -131,9 +132,10 @@ def stats(rows=200_000, codes=45_000, invalid=0, malformed=0, missing=0):
 
 
 def errors_for(s, prev_meta=None, prev_codes=frozenset(), new_codes=frozenset(),
-               shard_files=None, cfg=GuardConfig(), allow=False):
+               shard_files=None, cfg=GuardConfig(), allow=False,
+               upcoming_errors=(), upcoming_bytes=b""):
     return check_guards(s, prev_meta, set(prev_codes), set(new_codes), shard_files or {},
-                        cfg, allow)
+                        cfg, allow, upcoming_errors, upcoming_bytes)
 
 
 @pytest.mark.parametrize("s,prev,fails", [
@@ -229,7 +231,7 @@ def test_single_price_change_touches_only_its_shard(tmp_path):
     target["price"] = "27.50"
     build(tmp_path, raw=rows_to_csv(rows), checked_at="2026-09-18T02:00:00+08:00")
     touched = changed_files(before, snapshot_files(tmp_path))
-    assert touched == {"drug_index.json", "meta.json", "status.json",
+    assert touched == {"drug_index.json", "upcoming.json", "meta.json", "status.json",
                        str(Path("history") / "A017.json")}
 
 
@@ -239,7 +241,8 @@ def test_crossing_effective_date_updates_index_not_history(tmp_path):
     result = build(tmp_path, build_date=date(2026, 10, 1), checked_at="2026-10-01T02:00:00+08:00")
     touched = changed_files(before, snapshot_files(tmp_path))
     assert result["changed"] is True
-    assert touched == {"drug_index.json", "meta.json", "status.json"}
+    # upcoming.json 與 index 同進退（spec-upcoming §3.3）：跨生效日正是它最需要更新的時刻
+    assert touched == {"drug_index.json", "upcoming.json", "meta.json", "status.json"}
 
 
 # ── B6 shard size guard ─────────────────────────────────────────
@@ -299,3 +302,261 @@ def test_allow_anomaly_rejected_outside_workflow_dispatch(tmp_path, monkeypatch,
                      "--checked-at", CHECKED], cfg=GuardConfig(min_rows=1, min_codes=1))
     assert (code == 1) == refused
     assert (tmp_path / "status.json").exists() != refused
+
+
+# ── U5–U7 預告清單的發布契約（spec-upcoming.md §3.3、§3.4）──────
+UPCOMING = "upcoming.json"
+
+
+def read_upcoming(root):
+    return json.loads((Path(root) / UPCOMING).read_text("utf-8"))
+
+
+def item_of(payload, code):
+    return next(it for it in payload["items"] if it["code"] == code)
+
+
+def brief(payload):
+    return [(it["code"], it["effectiveDate"], it["rawPrice"], it["eventType"])
+            for it in payload["items"]]
+
+
+SNAPSHOT_UPCOMING = [("AB47689100", "2026-10-01", "7.90", "increase"),
+                     ("BC05037209", "2026-10-01", "0.00", "terminated"),
+                     ("BC26467100", "2026-10-01", "0", "terminated")]
+
+
+def test_u5_independent_builds_are_byte_identical(tmp_path):
+    """來源列順序不同、固定 D → 位元組相同，且內容正確（不是兩次都空）。"""
+    rows = nhi.parse_csv(SNAPSHOT.read_bytes())
+    first, second = tmp_path / "first", tmp_path / "second"
+    build(first, raw=rows_to_csv(rows))
+    build(second, raw=rows_to_csv(list(reversed(rows))), checked_at="2026-09-18T02:00:00+08:00")
+
+    assert (first / UPCOMING).read_bytes() == (second / UPCOMING).read_bytes()
+    payload = read_upcoming(first)
+    assert brief(payload) == SNAPSHOT_UPCOMING
+    assert payload["count"] == 3 and payload["codeCount"] == 3
+
+
+def test_u5_reverse_sentinel_changes_the_expected_item_values(tmp_path):
+    """指名反向哨兵：改 AB47689100 的 2026-10-01 價格 → 該列金額精確變成新值。
+
+    只斷言「檔案不同」會被 dataVersion 變動蒙混過去，upcoming 內容其實沒動。
+    """
+    rows = nhi.parse_csv(SNAPSHOT.read_bytes())
+    build(tmp_path, raw=rows_to_csv(rows))
+    before = item_of(read_upcoming(tmp_path), "AB47689100")
+    assert (before["price"], before["rawPrice"], before["previousPrice"],
+            before["absoluteChange"], before["percentChange"]) == (7.9, "7.90", 6.9, 1.0, 14.49)
+
+    target = next(r for r in rows if r["code"] == "AB47689100" and r["from"] == "1151001")
+    target["price"] = "9.00"
+    build(tmp_path, raw=rows_to_csv(rows), checked_at="2026-09-18T02:00:00+08:00")
+    after = item_of(read_upcoming(tmp_path), "AB47689100")
+    assert (after["price"], after["rawPrice"], after["previousPrice"],
+            after["absoluteChange"], after["percentChange"]) == (9.0, "9.00", 6.9, 2.1, 30.43)
+    assert after["eventType"] == "increase" and after["pricedBefore"] == 6.9
+
+
+@pytest.mark.parametrize("failure", ["generator", "validator"])
+def test_u6_upcoming_failure_publishes_nothing(tmp_path, monkeypatch, failure):
+    """生成失敗與驗證失敗都必須整批不發布：檔案內容與**檔案集合**皆不得變動。"""
+    build(tmp_path)
+    before_hash, before_files = tree_hash(tmp_path), set(snapshot_files(tmp_path))
+
+    if failure == "generator":
+        monkeypatch.setattr(bph.history, "build_upcoming",
+                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    else:
+        monkeypatch.setattr(bph.history, "validate_upcoming", lambda *a, **kw: ["注入的驗證失敗"])
+
+    with pytest.raises(BuildError):
+        build(tmp_path, checked_at="2026-09-18T02:00:00+08:00")
+    assert tree_hash(tmp_path) == before_hash
+    assert set(snapshot_files(tmp_path)) == before_files
+
+
+def test_u6_main_exits_non_zero_on_upcoming_validation_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(nhi, "download", lambda *a, **kw: SNAPSHOT.read_bytes())
+    monkeypatch.setattr(bph.history, "validate_upcoming", lambda *a, **kw: ["注入的驗證失敗"])
+    code = bph.main(["--data-dir", str(tmp_path), "--no-metadata", "--checked-at", CHECKED],
+                    cfg=GuardConfig(min_rows=1, min_codes=1))
+    assert code == 1
+    assert not (tmp_path / UPCOMING).exists() and not (tmp_path / "status.json").exists()
+
+
+def test_u6_valid_input_publishes_upcoming(tmp_path, monkeypatch):
+    """正對照：同一條路徑在合法輸入下確實會發布。"""
+    monkeypatch.setattr(nhi, "download", lambda *a, **kw: SNAPSHOT.read_bytes())
+    code = bph.main(["--data-dir", str(tmp_path), "--no-metadata", "--checked-at", CHECKED],
+                    cfg=GuardConfig(min_rows=1, min_codes=1))
+    assert code == 0 and brief(read_upcoming(tmp_path)) == SNAPSHOT_UPCOMING
+
+
+def test_u7a_unchanged_source_without_crossing_keeps_upcoming_untouched(tmp_path):
+    build(tmp_path)
+    before = snapshot_files(tmp_path)
+    result = build(tmp_path, checked_at="2026-09-18T02:00:00+08:00")
+    assert result["changed"] is False
+    assert changed_files(before, snapshot_files(tmp_path)) == {"status.json"}
+    assert brief(read_upcoming(tmp_path)) == SNAPSHOT_UPCOMING
+
+
+def test_u7a_crossing_effective_date_removes_the_row_that_took_effect(tmp_path):
+    """來源沒變、D 跨過生效日 → 與 index 一起更新，剛生效的列必須離開清單。
+
+    只改 buildDate／版本而沒移除該列的實作，會被日期與完整內容斷言擋下。
+    """
+    build(tmp_path, build_date=date(2026, 9, 11))
+    assert brief(read_upcoming(tmp_path)) == SNAPSHOT_UPCOMING
+    before = snapshot_files(tmp_path)
+
+    result = build(tmp_path, build_date=date(2026, 10, 1),
+                   checked_at="2026-10-01T02:00:00+08:00")
+    payload = read_upcoming(tmp_path)
+    assert result["changed"] is True
+    assert payload["buildDate"] == "2026-10-01"
+    assert payload["items"] == [] and payload["count"] == 0 and payload["codeCount"] == 0
+    assert "drug_index.json" in changed_files(before, snapshot_files(tmp_path))
+
+
+def test_u7a_changed_source_updates_upcoming_content(tmp_path):
+    rows = nhi.parse_csv(SNAPSHOT.read_bytes())
+    build(tmp_path, raw=rows_to_csv(rows))
+    next(r for r in rows if r["code"] == "AB47689100" and r["from"] == "1151001")["to"] = "1151231"
+    rows.append(make_row(code="AB47689100", price="6.00", frm="1160101", to="9991231"))
+    build(tmp_path, raw=rows_to_csv(rows), checked_at="2026-09-18T02:00:00+08:00")
+    assert brief(read_upcoming(tmp_path)) == [
+        ("AB47689100", "2026-10-01", "7.90", "increase"),
+        ("BC05037209", "2026-10-01", "0.00", "terminated"),
+        ("BC26467100", "2026-10-01", "0", "terminated"),
+        ("AB47689100", "2027-01-01", "6.00", "decrease")]
+
+
+# ── U7b 首次交付與版本遷移（§3.3.1）────────────────────────────
+def git(repo, *args):
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+
+
+def staged_check_paths():
+    """workflow 實際用來判定「有差異」的路徑清單；規則漂移時本測試會紅。"""
+    yml = (ROOT / ".github" / "workflows" / "build-data.yml").read_text("utf-8")
+    match = re.search(r"git diff --staged --quiet -- ([^\n;]+); then", yml)
+    assert match, "build-data.yml 的差異判定行已改寫，U7b 的前提需重新確認"
+    return match.group(1).split()
+
+
+def git_repo_with_data(tmp_path):
+    """已發布狀態＝一個乾淨的 repo，data/ 已 commit。"""
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "t@example.invalid")
+    git(repo, "config", "user.name", "t")
+    build(repo / "data")
+    git(repo, "add", "data")
+    git(repo, "commit", "-qm", "initial")
+    return repo
+
+
+def enters_changed_branch(repo):
+    """模擬 workflow：git add data/ 後，判定是否進入有差異分支。"""
+    git(repo, "add", "data")
+    quiet = git(repo, "diff", "--staged", "--quiet", "--", *staged_check_paths())
+    staged = git(repo, "diff", "--staged", "--name-only").stdout.split()
+    return quiet.returncode != 0, staged
+
+
+def test_u7b_first_delivery_produces_and_stages_upcoming(tmp_path):
+    """已發布版本沒有 upcoming.json、來源未變 → 產出且進入 commit。
+
+    「只在檔案不存在時生成」能通過生成，但若沒強制進入有差異分支，產物只會
+    留在工作目錄裡（`build-data.yml` 的無差異分支只 commit status.json）。
+    """
+    repo = git_repo_with_data(tmp_path)
+    (repo / "data" / UPCOMING).unlink()
+    git(repo, "commit", "-qam", "remove upcoming")
+
+    result = build(repo / "data", checked_at="2026-09-18T02:00:00+08:00")
+    assert result["upcomingMigration"] is True and result["changed"] is True
+    changed, staged = enters_changed_branch(repo)
+    assert changed and "data/upcoming.json" in staged and "data/meta.json" in staged
+    assert brief(read_upcoming(repo / "data")) == SNAPSHOT_UPCOMING
+
+
+def test_u7b_generator_version_mismatch_rebuilds_and_stages(tmp_path):
+    """已發布檔案的 generatorVersion 不符 → 重產且進入 commit（不是只看檔案存在）。"""
+    repo = git_repo_with_data(tmp_path)
+    stale = read_upcoming(repo / "data")
+    stale["generatorVersion"] = "upcoming/0"
+    stale["items"] = []
+    (repo / "data" / UPCOMING).write_bytes(bph.dumps(stale))
+    git(repo, "commit", "-qam", "stale upcoming")
+
+    result = build(repo / "data", checked_at="2026-09-18T02:00:00+08:00")
+    assert result["upcomingMigration"] is True and result["changed"] is True
+    changed, staged = enters_changed_branch(repo)
+    assert changed and "data/upcoming.json" in staged
+    payload = read_upcoming(repo / "data")
+    assert payload["generatorVersion"] == history.UPCOMING_GENERATOR_VERSION
+    assert brief(payload) == SNAPSHOT_UPCOMING
+
+
+def test_u7b_failed_migration_is_retried_next_run(tmp_path, monkeypatch):
+    """遷移中失敗 → 不推進完成狀態；下次執行仍視為未完成的遷移。"""
+    repo = git_repo_with_data(tmp_path)
+    (repo / "data" / UPCOMING).unlink()
+    git(repo, "commit", "-qam", "remove upcoming")
+    before = tree_hash(repo / "data")
+
+    monkeypatch.setattr(bph.history, "validate_upcoming", lambda *a, **kw: ["注入的驗證失敗"])
+    with pytest.raises(BuildError):
+        build(repo / "data", checked_at="2026-09-18T02:00:00+08:00")
+    assert tree_hash(repo / "data") == before
+    assert not (repo / "data" / UPCOMING).exists()
+    assert enters_changed_branch(repo)[0] is False          # 沒有任何東西可 commit
+
+    monkeypatch.undo()
+    result = build(repo / "data", checked_at="2026-09-25T02:00:00+08:00")
+    assert result["upcomingMigration"] is True
+    changed, staged = enters_changed_branch(repo)
+    assert changed and "data/upcoming.json" in staged
+
+
+def test_u7b_steady_state_is_not_treated_as_migration(tmp_path):
+    """反向哨兵：已有同版本產物、來源未變 → 不得每次都當成遷移重推。"""
+    repo = git_repo_with_data(tmp_path)
+    result = build(repo / "data", checked_at="2026-09-18T02:00:00+08:00")
+    assert result["upcomingMigration"] is False and result["changed"] is False
+    changed, staged = enters_changed_branch(repo)
+    assert changed is False and staged == ["data/status.json"]
+
+
+# ── §3.4 guards 與 meta ─────────────────────────────────────────
+def test_meta_records_upcoming_counts(tmp_path):
+    build(tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text("utf-8"))
+    assert meta["upcomingRows"] == 3 and meta["upcomingCodes"] == 3
+
+
+def test_upcoming_guards_warn_but_never_fail():
+    base = stats(rows=200_000, codes=45_000)
+    empty = {**base, "upcomingRows": 0, "upcomingCodes": 0}
+    errors, warnings, _ = errors_for(empty)
+    assert errors == [] and any("無任何未生效紀錄" in w for w in warnings)
+
+    many = {**base, "upcomingRows": 3_000, "upcomingCodes": 2_251}    # 5.002%
+    errors, warnings, _ = errors_for(many)
+    assert errors == [] and any("超過全部代號的 5%" in w for w in warnings)
+    boundary = {**base, "upcomingRows": 3_000, "upcomingCodes": 2_250}   # 5.00% 通過
+    assert not any("超過全部代號" in w for w in errors_for(boundary)[1])
+
+    errors, warnings, _ = errors_for({**base, "upcomingRows": 1, "upcomingCodes": 1},
+                                     upcoming_bytes=b"x" * 500_001)
+    assert errors == [] and any("upcoming.json raw" in w for w in warnings)
+
+
+def test_upcoming_validation_errors_are_build_errors():
+    errors, _, _ = errors_for(stats(), upcoming_errors=["items[0] code 為空字串"])
+    assert any("upcoming.json 驗證失敗" in e for e in errors)
