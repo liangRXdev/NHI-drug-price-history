@@ -15,6 +15,13 @@ const TYPES = {
 
 createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  // 只送出 headers 與半截 body 後停住：模擬「接收 body 階段逾時」，
+  // 這是 route.fulfill 做不到的情境（fulfill 是原子的）
+  if (path === '/__stall_body') {
+    res.writeHead(200, { 'Content-Type': TYPES['.json'], 'Content-Length': '999999' });
+    res.write('{"dataVersion":');
+    return;
+  }
   if (path === BASE) { res.writeHead(301, { Location: `${BASE}/` }); res.end(); return; }
   if (path.startsWith(`${BASE}/`)) path = path.slice(BASE.length);
   if (path.endsWith('/')) path += 'index.html';
