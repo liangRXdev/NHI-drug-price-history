@@ -144,28 +144,33 @@ test('T2 舊回應晚到不得覆蓋新回應的內容', async ({ page }) => {
     upcomingItem({ code: 'NEW0000002', chName: '新回應藥二' }),
   ]);
   let call = 0;
-  await mockSite(page, {
-    upcoming: [slowOld, fastNew],
-    // 第一次延遲 2.5 秒，第二次立刻回
-    upcomingDelay: 0,
-    timeouts: { upcoming: 30_000 },
-  });
-  // upcomingDelay 是全域的，改用逐次攔截：重新掛一層 route 只處理 upcoming.json
+  let releaseSlow;
+  const slowGate = new Promise((ok) => { releaseSlow = ok; });
+  let slowDelivered;
+  const slowDone = new Promise((ok) => { slowDelivered = ok; });
+  await mockSite(page, { timeouts: { upcoming: 30_000 } });
+  // 逐次攔截：第一次卡住等測試放行（不靠計時，避免平行執行時的抖動），第二次立刻回
   await page.route('**/data/upcoming.json', async (route) => {
     call += 1;
-    const body = call === 1 ? slowOld : fastNew;
-    if (call === 1) await new Promise((ok) => setTimeout(ok, 2500));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (call === 1) {
+      await slowGate;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(slowOld) });
+      slowDelivered();
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fastNew) });
   });
 
   await page.goto('/?view=upcoming');
   await expect(page.locator('.skeleton').first()).toBeVisible();
   await back(page).click();
   await enter(page);                                             // 第 2 次請求（快）
-  await expect(rows(page)).toHaveCount(2);
+  await expect(rows(page)).toHaveCount(2, { timeout: 15_000 });
   await expect(rows(page).first()).toContainText('NEW0000001');
 
-  await page.waitForTimeout(3000);                               // 舊回應此時才抵達
+  releaseSlow();
+  await slowDone;                                                // 舊回應此刻才抵達
+  await page.waitForTimeout(300);
   expect(call).toBe(2);
   await expect(rows(page)).toHaveCount(2);                       // 不得被舊回應蓋掉
   await expect(page.locator('#upcomingList')).not.toContainText('OLD0000001');
