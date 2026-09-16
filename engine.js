@@ -10,6 +10,10 @@
 //   §8.6 過期警示          → staleness()
 //   §7／§8.7 分片與混批    → shardPrefix()、validate*()
 //
+// 規則對應 spec-upcoming.md：
+//   §5.5.1 預告清單合法性   → validateUpcoming()
+//   §5.1 徽章數字（依 T）   → upcomingPendingCount()
+//
 // 日期一律為 ISO 'YYYY-MM-DD' 字串（字典序即時間序）；有效區間為閉區間 [from, to]，to=null 為無迄日。
 
 export const MAX_RESULTS = 50;
@@ -565,4 +569,75 @@ export function niceTicks(min, max, n = 5) {
   const ticks = [];
   for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) ticks.push(+v.toFixed(10));
   return ticks;
+}
+
+// ── 預告中心（spec-upcoming.md）──────────────────────────────────
+// 前端內建的期望生成規則版本。dataVersion 只依來源內容，同一份來源在規則變更
+// 前後的 dataVersion 相同，少了這個欄位就分不出舊規則產物（§3.3.2）。
+export const UPCOMING_GENERATOR_VERSION = 'upcoming/1';
+
+const PRICE_STATES = new Set(['priced', 'terminated', 'suspended', 'missing', 'malformed']);
+const EVENT_TYPES = new Set(['initial', 'unknown', 'unchanged', 'terminated', 'suspended',
+  'increase', 'decrease', 'relisted', 'first_priced']);
+export const UPCOMING_META_FIELDS = ['chName', 'enName', 'ingredient', 'strength',
+  'strengthUnit', 'dosageForm', 'atcCode', 'manufacturer'];
+const UPCOMING_NULLABLE = ['endDate', 'price', 'previousPrice', 'pricedBefore',
+  'previousState', 'absoluteChange', 'percentChange'];
+
+function validUpcomingRow(it, buildDate) {
+  if (!isObj(it)) return false;
+  if (typeof it.code !== 'string' || it.code === '') return false;
+  if (typeof it.rawPrice !== 'string' || typeof it.everPriced !== 'boolean'
+      || typeof it.crossesStop !== 'boolean' || !Array.isArray(it.flags)) return false;
+  if (it.flags.some((f) => typeof f !== 'string')) return false;
+  if (!PRICE_STATES.has(it.priceState) || !EVENT_TYPES.has(it.eventType)) return false;
+  // 描述欄位允許 null（只有未來列的代號），但不得省略鍵——省略等於分不出「來源沒有」
+  // 與「產生器漏寫」（§5.5.1 合法缺值）
+  for (const k of UPCOMING_META_FIELDS) {
+    if (!(k in it) || (it[k] !== null && typeof it[k] !== 'string')) return false;
+  }
+  for (const k of UPCOMING_NULLABLE) if (!(k in it)) return false;
+  if (it.previousState !== null && !PRICE_STATES.has(it.previousState)) return false;
+  // 狀態與價格一致性：priced ⟺ price 為正數
+  if (it.priceState === 'priced' ? !(typeof it.price === 'number' && it.price > 0)
+    : it.price !== null) return false;
+  if (it.everPriced !== (it.pricedBefore !== null)) return false;
+  for (const k of ['previousPrice', 'pricedBefore', 'absoluteChange', 'percentChange']) {
+    if (it[k] !== null && typeof it[k] !== 'number') return false;
+  }
+  if (!ISO_DATE.test(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
+  if (it.endDate !== null && (!ISO_DATE.test(it.endDate) || it.endDate < it.effectiveDate)) return false;
+  return true;
+}
+
+/**
+ * spec-upcoming §5.5.1：→ { ok, reason }。reason 'version_mismatch'｜'invalid'。
+ * **任一列不合法即整份損毀**：靜默跳過壞列會讓使用者看到一份看起來完整、其實缺項的清單。
+ */
+export function validateUpcoming(payload, meta) {
+  if (!isObj(payload) || typeof payload.dataVersion !== 'string'
+      || typeof payload.generatorVersion !== 'string' || !ISO_DATE.test(payload.buildDate ?? '')
+      || !Number.isInteger(payload.count) || !Number.isInteger(payload.codeCount)
+      || !Array.isArray(payload.items)) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (payload.generatorVersion !== UPCOMING_GENERATOR_VERSION) {
+    return { ok: false, reason: 'version_mismatch' };
+  }
+  if (!meta || typeof meta.dataVersion !== 'string') return { ok: false, reason: 'version_mismatch' };
+  if (payload.dataVersion !== meta.dataVersion) return { ok: false, reason: 'version_mismatch' };
+  // count／codeCount 比對的是原始完整 items，不是經 T、篩選或去重後的集合
+  if (payload.count !== payload.items.length) return { ok: false, reason: 'invalid' };
+  if (payload.codeCount !== new Set(payload.items.map((it) => (isObj(it) ? it.code : it))).size) {
+    return { ok: false, reason: 'invalid' };
+  }
+  for (const it of payload.items) {
+    if (!validUpcomingRow(it, payload.buildDate)) return { ok: false, reason: 'invalid' };
+  }
+  return { ok: true };
+}
+
+/** 依瀏覽器日期 T 計算徽章數字：只算仍未生效的列（§5.1）。 */
+export function upcomingPendingCount(items, T) {
+  return items.reduce((n, it) => n + (it.effectiveDate > T ? 1 : 0), 0);
 }

@@ -25,11 +25,15 @@ const state = {
   detailSeq: 0,
   current: null,              // 目前詳細頁 { code, entry }
   newestFirst: true,
+  // 預告中心：payload 為最後一份通過驗證的快照，更新失敗時沿用（spec-upcoming §5.5）
+  upcoming: { phase: 'idle', payload: null, error: null, reason: null, updateFailed: null },
+  upcomingSeq: 0,
+  upcomingInflight: false,
 };
 
 // 逾時（毫秒）：請求卡住時必須在有限時間內轉為錯誤狀態，不可無限顯示「載入中」（codex R7）。
 // index 約 3 MB gzip，慢速網路需較長時間。e2e 可經 window.NHI_FETCH_TIMEOUTS 縮短。
-const TIMEOUT = { meta: 30_000, index: 120_000, status: 20_000, shard: 45_000, ...(globalThis.NHI_FETCH_TIMEOUTS || {}) };
+const TIMEOUT = { meta: 30_000, index: 120_000, status: 20_000, shard: 45_000, upcoming: 30_000, ...(globalThis.NHI_FETCH_TIMEOUTS || {}) };
 
 class LoadError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
@@ -79,6 +83,7 @@ async function loadCore() {
     state.statusSettled = true;
     renderBanners();
     renderSource();
+    renderUpcoming();                           // 預告頁的「最後檢查日」與到期提示互相獨立（§2）
     if (state.current) renderDetail();          // 紅色警示須同步加註於現行價旁
   });
 
@@ -278,8 +283,10 @@ function scheduleSearch() {
 
 // ── 路由 ────────────────────────────────────────────────────────
 function route() {
-  const code = new URLSearchParams(location.search).get('code');
-  if (code !== null) showDetail(code.trim().toUpperCase());
+  const params = new URLSearchParams(location.search);
+  const code = params.get('code');
+  if (params.get('view') === 'upcoming') showUpcoming();
+  else if (code !== null) showDetail(code.trim().toUpperCase());
   else showSearch();
 }
 
@@ -287,6 +294,7 @@ function showSearch() {
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
   state.current = null;
   $('detailView').hidden = true;
+  $('upcomingView').hidden = true;
   $('searchView').hidden = false;
   $('detail').innerHTML = '';
   document.title = APP_TITLE;
@@ -303,6 +311,7 @@ async function showDetail(code) {
   const seq = ++state.detailSeq;
   state.current = null;
   $('searchView').hidden = true;
+  $('upcomingView').hidden = true;
   $('detailView').hidden = false;
   const box = $('detail');
 
@@ -371,6 +380,9 @@ function renderDetail() {
   const s = E.summaryAt(recs, T);
   const meta = E.selectMeta(entry, T);
   const st = stale();
+  // 入口只依詳細頁自己的 history 判定，不讀 upcoming.json：詳細頁的單一真相仍是
+  // 完整 history，且兩者跨日後本來就可能不一致（詳細頁依 T、清單依 D）（§6）
+  const hasUpcoming = recs.some((r) => r.from > T);
 
   const facts = meta ? [
     ['成分', meta.ingredient], ['規格', strengthText(meta)], ['劑型', meta.dosageForm],
@@ -386,9 +398,10 @@ function renderDetail() {
     ${meta ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${dash(v)}</dd>`).join('')}</dl>`
     : '<p class="hint">尚無已生效紀錄，描述欄位待生效後顯示。</p>'}
     <p class="hint" style="margin:0.6rem 0 0">品名、成分等描述欄位為來源以現況回填之資料，非各期間當時的名稱。</p>
-    ${tfda || rule ? `<div class="links">
+    ${tfda || rule || hasUpcoming ? `<div class="links">
       ${tfda ? `<a href="${esc(tfda)}" target="_blank" rel="noopener">TFDA 許可證資料 ↗</a>` : ''}
       ${rule ? `<a href="${esc(rule)}" target="_blank" rel="noopener">健保給付規定（PDF）↗</a>` : ''}
+      ${hasUpcoming ? '<a href="?view=upcoming" data-action="to-upcoming">前往預告中心 ↗</a>' : ''}
     </div>` : ''}
   </div>`;
 
@@ -650,6 +663,147 @@ function renderTable(entry, T) {
     <tbody>${rows.join('')}${invalid.join('')}</tbody></table>`;
 }
 
+// ── 預告中心（spec-upcoming.md §5）────────────────────────────────
+// 兩個日期必須分別呈現，不得互相代替（§2）：
+//   D＝upcoming.buildDate  已發布的這份預告是哪一天產生的
+//   T＝state.today         瀏覽器本地日期，決定每列是「預告」或「已生效（資料待更新）」
+// 「已生效」提示以 T 對 effectiveDate 判定，獨立於過期警示（以最後檢查日判定）：
+// 最後檢查日很新時不得因此壓掉到期提示。
+function upcomingBadgeText() {
+  const u = state.upcoming;
+  if (u.phase !== 'ready') return '預告';
+  return `預告 ${E.upcomingPendingCount(u.payload.items, state.today).toLocaleString('zh-TW')}`;
+}
+
+function renderUpcomingBadge() {
+  $('upcomingBadge').textContent = upcomingBadgeText();
+}
+
+async function loadUpcoming({ force = false } = {}) {
+  const u = state.upcoming;
+  if (state.core === 'loading') {        // 版本驗證需要 meta；核心資源落定後 route() 會再進來
+    state.upcoming = { ...u, phase: 'loading' };
+    renderUpcoming();
+    return;
+  }
+  if (state.upcomingInflight) return;
+  if (!force && u.phase === 'ready') return;
+  const seq = ++state.upcomingSeq;
+  state.upcomingInflight = true;
+  state.upcoming = { ...u, phase: u.payload ? u.phase : 'loading', error: null, reason: null, updateFailed: null };
+  renderUpcoming();
+
+  let next;
+  try {
+    const payload = await fetchJSON('data/upcoming.json', TIMEOUT.upcoming);
+    const v = E.validateUpcoming(payload, state.meta);
+    if (!state.meta) {
+      // meta 不可用 → 無法驗證版本，視同不可用；不得略過版本檢查逕行渲染（§5.5）
+      next = { phase: 'error', payload: null, error: new LoadError('invalid', '無法驗證資料版本'), reason: 'unavailable', updateFailed: null };
+    } else if (v.ok) next = { phase: 'ready', payload, error: null, reason: null, updateFailed: null };
+    else next = { phase: 'error', payload: null, error: null, reason: v.reason, updateFailed: null };
+  } catch (e) {
+    const err = e instanceof LoadError ? e : new LoadError('invalid', String(e));
+    // 網路／HTTP／逾時：已有經驗證的快照就保留舊清單，並連同當時的 buildDate 一起標示；
+    // 內容不合法與版本不符則不得保留——新資料證明來源已壞（§5.5）
+    if (err.kind === 'invalid') next = { phase: 'error', payload: null, error: err, reason: 'invalid', updateFailed: null };
+    else if (state.upcoming.payload) next = { phase: 'ready', payload: state.upcoming.payload, error: null, reason: null, updateFailed: err };
+    else next = { phase: 'error', payload: null, error: err, reason: 'unavailable', updateFailed: null };
+  }
+  state.upcomingInflight = false;
+  if (seq !== state.upcomingSeq) return;          // 已有較新的請求：丟棄本次結果
+  state.upcoming = next;
+  renderUpcomingBadge();
+  renderUpcoming();
+}
+
+const UPCOMING_ERROR_TEXT = {
+  version_mismatch: '資料已更新，請重新整理頁面。',
+  invalid: '預告資料內容不合法，無法顯示。',
+  unavailable: '無法取得預告資料。',
+};
+
+function upcomingDatesHTML() {
+  const d = state.upcoming.payload?.buildDate;
+  const checked = state.statusSettled ? (state.status?.lastCheckedAt ? twTime(state.status.lastCheckedAt) : '無法取得') : '載入中…';
+  return `資料產生日 <span class="mono">${d ? esc(d) : '—'}</span>・最後檢查 ${checked}`;
+}
+
+function renderUpcoming() {
+  if ($('upcomingView').hidden) return;
+  const u = state.upcoming;
+  const list = $('upcomingList');
+  const status = $('upcomingStatus');
+  $('upcomingDates').innerHTML = upcomingDatesHTML();
+
+  if (u.phase === 'loading') {
+    status.textContent = '預告資料載入中…';
+    $('upcomingBanner').innerHTML = '';
+    list.innerHTML = '<div class="skeleton" aria-hidden="true"></div>'.repeat(3);
+    return;
+  }
+  if (u.phase !== 'ready') {
+    status.textContent = '';
+    list.innerHTML = '';
+    const retry = u.reason === 'version_mismatch'
+      ? '<button type="button" data-action="reload">重新整理</button>'
+      : '<button type="button" data-action="retry-upcoming">重試</button>';
+    const detail = u.error?.message ? `（${esc(u.error.message)}）` : '';
+    $('upcomingBanner').innerHTML = `<div class="alert alert--error">${UPCOMING_ERROR_TEXT[u.reason] || UPCOMING_ERROR_TEXT.unavailable}${detail}${retry}</div>`;
+    return;
+  }
+
+  const banners = [];
+  if (u.updateFailed) {
+    banners.push(`<div class="alert alert--warn">更新失敗（${esc(u.updateFailed.message)}），顯示的是 ${esc(u.payload.buildDate)} 的資料。`
+      + '<button type="button" data-action="retry-upcoming">重試</button></div>');
+  }
+  if (state.today < u.payload.buildDate) {
+    banners.push(`<div class="alert alert--warn">本站資料產生於 ${esc(u.payload.buildDate)}，晚於你的裝置日期；清單可能未涵蓋該日之後的公告。</div>`);
+  }
+  $('upcomingBanner').innerHTML = banners.join('');
+
+  const items = u.payload.items;
+  const pending = E.upcomingPendingCount(items, state.today);
+  if (items.length === 0) {
+    status.textContent = '目前資料中無未生效的公告。';
+    list.innerHTML = '';
+    return;
+  }
+  // 全部已生效時仍列出全部，不得顯示為空白頁（§2）
+  status.textContent = pending === 0
+    ? `目前資料中已無未生效的公告；以下 ${items.length} 筆為本站資料產生後已生效、尚未重建的紀錄。`
+    : `共 ${items.length} 筆公告，其中 ${pending} 筆尚未生效。`;
+  list.innerHTML = items.map(upcomingRowHTML).join('');
+}
+
+function upcomingRowHTML(it) {
+  const expired = it.effectiveDate <= state.today;
+  const sub = [it.ingredient, it.strength ? `${it.strength}${it.strengthUnit ? ` ${it.strengthUnit}` : ''}` : '', it.dosageForm]
+    .filter(Boolean).map(esc).join('・');
+  return `<div class="upcoming-row" data-code="${esc(it.code)}" data-date="${esc(it.effectiveDate)}">
+    <div class="r-top"><span class="r-name">${dash(it.chName)}</span><span class="r-code mono">${esc(it.code)}</span></div>
+    <div class="r-en">${dash(it.enName)}</div>
+    ${sub ? `<div class="r-sub">${sub}</div>` : ''}
+    <div class="r-price"><span class="mono">${esc(it.effectiveDate)}</span> 起
+      ${expired ? '<span class="tag warn" data-expired>已生效（本站資料尚未重建）</span>' : ''}
+      ${dash(it.atcCode)}${flagTags(it.flags)}</div>
+    <div class="r-meta"><a href="?code=${encodeURIComponent(it.code)}" data-code="${esc(it.code)}" data-action="to-detail">查看歷史 ↗</a></div>
+  </div>`;
+}
+
+function showUpcoming() {
+  state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
+  state.current = null;
+  $('searchView').hidden = true;
+  $('detailView').hidden = true;
+  $('detail').innerHTML = '';
+  $('upcomingView').hidden = false;
+  document.title = `預告中心 — ${APP_TITLE}`;
+  renderUpcoming();
+  loadUpcoming({ force: true });       // 每次進入都重取：清單很小，且使 §5.5 的「更新失敗」可達
+}
+
 // ── 事件 ────────────────────────────────────────────────────────
 function bind() {
   const q = $('q');
@@ -675,6 +829,17 @@ function bind() {
       e.preventDefault();
       if (history.state?.fromSearch) history.back();
       else { history.pushState(null, '', location.pathname); showSearch(); }
+    } else if (action === 'to-upcoming') {
+      e.preventDefault();
+      history.pushState({ fromSearch: true }, '', '?view=upcoming');
+      showUpcoming();
+      window.scrollTo(0, 0);
+    } else if (action === 'to-detail') {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      navigate(el.dataset.code);
+    } else if (action === 'retry-upcoming') {
+      loadUpcoming({ force: true });
     } else if (action === 'retry-core') {
       loadCore();
     } else if (action === 'retry-shard') {

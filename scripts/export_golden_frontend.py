@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from build_price_history import build_outputs, dumps  # noqa: E402
+from build_price_history import build_outputs, dumps, upcoming_payload  # noqa: E402
 from lib.golden import SNAPSHOT_DATE, SNAPSHOT_FILE  # noqa: E402
 from lib.nhi import parse_csv  # noqa: E402
 
@@ -26,11 +26,14 @@ OUT = ROOT / "tests" / "fixtures" / f"golden_frontend_{SNAPSHOT_DATE}.json"
 
 def render():
     rows = parse_csv((ROOT / SNAPSHOT_FILE).read_bytes())
-    shards, index_drugs, _, _ = build_outputs(rows, date.fromisoformat(SNAPSHOT_DATE))
+    build_date = date.fromisoformat(SNAPSHOT_DATE)
+    shards, index_drugs, upcoming_items, _ = build_outputs(rows, build_date)
     return dumps({
         "buildDate": SNAPSHOT_DATE,
         "shards": {code: entry for shard in shards.values() for code, entry in shard.items()},
         "index": {d["code"]: d for d in index_drugs},
+        # e2e mock 的 upcoming.json 由此產生，確保與 Python 生成器同一套規則
+        "upcoming": upcoming_payload(upcoming_items, "sha256:golden", build_date),
     })
 
 
