@@ -273,6 +273,63 @@ table.history .cell-state { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 .compare-name { flex: 1 1 8rem; overflow-wrap: anywhere; }
 .compare-state { color: var(--warn-text); font-size: 0.8rem; }
 
+/* 比較圖表（spec-compare.md §4.2）：四條線以顏色＋線型雙重區分 */
+.cmp-controls { display: flex; gap: 0.5rem 1rem; flex-wrap: wrap; align-items: center; margin: 0.6rem 0; }
+.cmp-group { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.cmp-group button { border: none; background: #fff; font: inherit; font-size: 0.8rem; padding: 0.3rem 0.7rem; cursor: pointer; }
+.cmp-group button + button { border-left: 1px solid var(--border); }
+.cmp-group button[aria-pressed="true"] { background: var(--accent-hover); color: #fff; }
+.cmp-chart-wrap { position: relative; }
+.cmp-skeleton { height: 16rem; }
+.cmp-line { fill: none; stroke-width: 2; stroke-linecap: butt; }
+.cmp-line.upcoming { opacity: 0.45; }           /* 預告以不透明度表示，線型仍代表序位 */
+.cmp-line.s1 { stroke: var(--s1); }
+.cmp-line.s2 { stroke: var(--s2); stroke-dasharray: 8 4; }
+.cmp-line.s3 { stroke: var(--s3); stroke-dasharray: 3 3; }
+.cmp-line.s4 { stroke: var(--s4); stroke-dasharray: 1 4; stroke-linecap: round; }
+.cmp-marker { stroke: #fff; stroke-width: 1; }
+.cmp-marker.s1 { fill: var(--s1); }
+.cmp-marker.s2 { fill: var(--s2); }
+.cmp-marker.s3 { fill: var(--s3); }
+.cmp-marker.s4 { fill: var(--s4); }
+.cmp-marker.upcoming { opacity: 0.45; }
+.cmp-band { stroke: #fff; stroke-width: 0.5; }
+.cmp-band.band-hidden { opacity: 0.35; }
+.band-k-priced { fill: var(--accent-light); }
+.band-k-terminated { fill: url(#hatchTerm); }
+.band-k-unpriced_zero { fill: url(#lineZero); }
+.band-k-suspended { fill: url(#dotsSusp); }
+.band-k-gap { fill: url(#hatchGap); }
+.band-k-before, .band-k-uncovered { fill: #F7F5F1; }
+.band-k-conflict, .band-k-malformed, .band-k-missing { fill: url(#crossUnknown); }
+.cmp-band.band-error, .cmp-band.band-invalid { fill: #FDF3F2; }
+.cmp-band.band-missing { fill: #FFF3E0; }
+.cmp-band.band-loading { fill: #F2EFEA; }
+.cmp-band.band-upcoming { opacity: 0.5; }
+.band-label { font-size: 9px; fill: var(--text-muted); }
+.cmp-cross { stroke: var(--text-primary); stroke-width: 1; stroke-dasharray: 3 3; }
+.cross-tip {
+  position: absolute; right: 0.5rem; top: 0.5rem; z-index: 5; max-width: 22rem;
+  background: var(--bg-card); border: 1px solid var(--accent); border-radius: 6px;
+  padding: 0.4rem 0.6rem; font-size: 0.78rem; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.cross-day { font-weight: 700; margin-bottom: 0.2rem; }
+.cross-row { display: flex; gap: 0.35rem; align-items: baseline; }
+.cmp-legend { list-style: none; padding: 0; margin: 0.6rem 0 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.cmp-legend-item button {
+  display: flex; gap: 0.4rem; align-items: baseline; width: 100%; text-align: left;
+  border: 1px solid var(--border); border-radius: 6px; background: #fff; font: inherit;
+  font-size: 0.8rem; padding: 0.35rem 0.5rem; cursor: pointer; flex-wrap: wrap;
+}
+.cmp-legend-item[data-visible="false"] button { opacity: 0.55; border-style: dashed; }
+.cmp-legend-name { flex: 1 1 8rem; overflow-wrap: anywhere; }
+.cmp-legend-state, .cmp-legend-base { color: var(--text-muted); font-size: 0.75rem; }
+.cmp-swatch { width: 1.1rem; height: 0.55rem; border-radius: 2px; display: inline-block; }
+[data-slot="1"] .cmp-swatch { background: var(--s1); }
+[data-slot="2"] .cmp-swatch { background: var(--s2); }
+[data-slot="3"] .cmp-swatch { background: var(--s3); }
+[data-slot="4"] .cmp-swatch { background: var(--s4); }
+
 @media (max-width: 480px) {
   .wrap { padding: 1rem 0.75rem 3rem; }
   .card { padding: 1rem 0.85rem 1.2rem; }

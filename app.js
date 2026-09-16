@@ -37,6 +37,9 @@ const state = {
   compareMismatch: false,
   compareSeq: 0,
   compareNotice: null,
+  comparePreset: 'all',
+  compareMode: 'abs',
+  compareHidden: new Set(),        // 可見性只影響主圖與 band，不影響選取集合（§4.2.1）
   shardInflight: new Map(),
 };
 
@@ -497,6 +500,20 @@ function summaryMetrics(s, recs, entry, st) {
 
 // ── 圖表（手刻 SVG；區段模型見 engine.chartModel）─────────────────
 // viewBox 寬度＝實際容器寬度，文字才會維持 11px（固定 800 寬在手機上會縮到約 5px）
+// 狀態區塊的紋理：單品項圖與比較圖共用同一組定義（以紋理而非只靠顏色區分）
+const CHART_DEFS = `<defs>
+    <pattern id="hatchTerm" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="8" height="8" fill="#FDF3F2"/><line x1="0" y1="0" x2="0" y2="8" style="stroke:var(--c-term)" stroke-width="2"/></pattern>
+    <pattern id="dotsSusp" width="7" height="7" patternUnits="userSpaceOnUse">
+      <rect width="7" height="7" fill="#F1F1F1"/><circle cx="3.5" cy="3.5" r="1.3" style="fill:var(--c-susp)"/></pattern>
+    <pattern id="crossUnknown" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#FFF8EC"/><path d="M0 0L8 8M8 0L0 8" style="stroke:var(--c-unknown)" stroke-width="1"/></pattern>
+    <pattern id="lineZero" width="10" height="6" patternUnits="userSpaceOnUse">
+      <rect width="10" height="6" fill="#F4F1EB"/><line x1="0" y1="3" x2="10" y2="3" style="stroke:var(--c-susp)" stroke-width="0.8"/></pattern>
+    <pattern id="hatchGap" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+      <rect width="6" height="6" fill="#EFEAE1"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--c-gap)" stroke-width="1.5"/></pattern>
+  </defs>`;
+
 const M = { l: 58, r: 14, t: 16, b: 30 };
 let chartWidth = 800;
 
@@ -522,16 +539,7 @@ function renderChart(recs, T) {
   const tip = (r) => `${r.from} ～ ${r.to ?? '無迄日'}：${E.stateLabel(r, priors.get(r), 'cell')}${r.from > T ? '（預告）' : ''}`;
   const parts = [];
 
-  parts.push(`<defs>
-    <pattern id="hatchTerm" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <rect width="8" height="8" fill="#FDF3F2"/><line x1="0" y1="0" x2="0" y2="8" style="stroke:var(--c-term)" stroke-width="2"/></pattern>
-    <pattern id="dotsSusp" width="7" height="7" patternUnits="userSpaceOnUse">
-      <rect width="7" height="7" fill="#F1F1F1"/><circle cx="3.5" cy="3.5" r="1.3" style="fill:var(--c-susp)"/></pattern>
-    <pattern id="crossUnknown" width="8" height="8" patternUnits="userSpaceOnUse">
-      <rect width="8" height="8" fill="#FFF8EC"/><path d="M0 0L8 8M8 0L0 8" style="stroke:var(--c-unknown)" stroke-width="1"/></pattern>
-    <pattern id="lineZero" width="10" height="6" patternUnits="userSpaceOnUse">
-      <rect width="10" height="6" fill="#F4F1EB"/><line x1="0" y1="3" x2="10" y2="3" style="stroke:var(--c-susp)" stroke-width="0.8"/></pattern>
-  </defs>`);
+  parts.push(CHART_DEFS);
 
   // 區塊：終止／此前無有價的 0 元／暫停／異常／空窗
   for (const b of m.bands) {
@@ -1175,8 +1183,14 @@ function renderCompare() {
     ? `已略過 ${state.compare.skipped} 個超出上限的代號。` : '';
 
   if (state.compareMismatch) { $('compareBody').innerHTML = ''; return; }
+  const loading = items.some((x) => (state.compareData.get(x.code) || {}).status === 'loading');
+  const model = loading ? null : compareModel();
+  // 任一 shard 載入中 → 骨架；不得先畫已到的序列再補上（會造成誤讀走勢）
+  const chart = loading
+    ? '<div class="skeleton cmp-skeleton" aria-hidden="true"></div><p class="search-status">圖表載入中…</p>'
+    : `${compareControlsHTML()}${compareChartHTML(model)}${compareLegendHTML(model)}`;
   // 選定集合的每一個代號都要被交代，含異常者（§6.1）
-  $('compareBody').innerHTML = `<ul class="compare-codes">${items.map((x) => {
+  $('compareBody').innerHTML = chart + `<ul class="compare-codes">${items.map((x) => {
     const d = state.compareData.get(x.code) || { status: 'loading' };
     const drug = state.byCode?.get(x.code);
     const name = d.status === 'ok' ? (E.selectMeta(d.entry, state.today)?.chName ?? drug?.chName ?? '') : '';
@@ -1228,6 +1242,274 @@ function showCompare() {
   loadCompareData();
 }
 
+// ── 比較圖表（spec-compare.md §4）────────────────────────────────
+// 主區只畫有價線段，非有價一律中斷；狀態改由下方每代號一條 band 呈現——
+// 4 個代號同時畫區塊會互相覆蓋（§4.3）。
+const CM = { l: 56, r: 14, t: 18, b: 26 };
+const BAND_H = 14;
+const BAND_GAP = 3;
+const MARKER_TYPES = new Set(['increase', 'decrease', 'relisted']);
+
+/** 依目前選取、可見性與 preset 組出繪圖模型。純讀 state，不改 DOM。 */
+function compareModel() {
+  const T = state.today;
+  const items = state.compare.items;
+  const series = items.map((x) => {
+    const d = state.compareData.get(x.code) || { status: 'loading' };
+    const records = d.status === 'ok' ? d.entry.records : [];
+    return {
+      code: x.code,
+      slot: x.slot,
+      status: d.status,
+      entry: d.entry || null,
+      records,
+      visible: !state.compareHidden.has(x.code),
+      baseline: records.length ? E.relativeBaseline(records) : { kind: 'none', record: null },
+    };
+  });
+  const range = E.compareRange(series.filter((s) => s.records.length), T, state.comparePreset);
+  if (!range) return { range: null, series, T };
+
+  for (const s of series) {
+    s.segments = s.records.length ? E.compareSegments(s.records, range.from, range.to, T) : [];
+    s.bands = s.records.length ? E.statusBands(s.records, range.from, range.to, T) : [];
+    s.markers = s.segments.filter((g) => MARKER_TYPES.has(g.record.eventType) && !g.clippedLeft);
+  }
+
+  // Y 軸取值集合：只看**可見**序列的可繪製點（已隱藏者不納入）
+  const values = [];
+  for (const s of series) {
+    if (!s.visible) continue;
+    for (const g of s.segments) {
+      if (state.compareMode === 'rel') {
+        if (s.baseline.kind !== 'ok') continue;
+        const v = E.relativeIndex(g.rawPrice, s.baseline.rawPrice);
+        if (v !== null) values.push(Number(v));
+      } else values.push(g.price);
+    }
+  }
+  let yMin = 0;
+  let yMax = 1;
+  if (values.length) {
+    const lo = Math.min(...values);
+    const hi = Math.max(...values);
+    const span = hi - lo || hi * 0.2 || 1;
+    yMin = Math.max(0, lo - span * 0.15);
+    yMax = hi + span * 0.15;
+  }
+  return { range, series, T, yMin, yMax, hasValues: values.length > 0 };
+}
+
+const seriesValue = (s, seg) => (state.compareMode === 'rel'
+  ? (s.baseline.kind === 'ok' ? Number(E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)) : null)
+  : seg.price);
+
+function compareChartHTML(m) {
+  if (!m.range) return '<p class="hint">無可繪製的區間。</p>';
+  const W = chartWidth;
+  const bandsH = (BAND_H + BAND_GAP) * m.series.length;
+  const H = (W < 520 ? 240 : 300) + bandsH;
+  const iw = W - CM.l - CM.r;
+  const plotH = H - CM.t - CM.b - bandsH - 10;
+  const x0n = E.dayNumber(m.range.from);
+  const x1n = E.dayNumber(m.range.to);
+  const pad = Math.max(10, Math.round((x1n - x0n) * 0.02));
+  const xMin = x0n;
+  const xMax = x1n + pad;
+  const x = (d) => CM.l + ((d - xMin) / (xMax - xMin)) * iw;
+  const y = (v) => CM.t + (1 - (v - m.yMin) / (m.yMax - m.yMin)) * plotH;
+  const f = (n) => n.toFixed(1);
+  const parts = [];
+
+  // 格線與 Y 軸
+  if (m.hasValues) {
+    for (const v of E.niceTicks(m.yMin, m.yMax, 5)) {
+      parts.push(`<g class="grid"><line x1="${CM.l}" x2="${W - CM.r}" y1="${f(y(v))}" y2="${f(y(v))}"/></g>
+        <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(state.compareMode === 'rel' ? v.toFixed(0) : E.fmtMoney(v))}</text>`);
+    }
+    parts.push(`<text x="${CM.l - 6}" y="${CM.t - 5}" text-anchor="end">${state.compareMode === 'rel' ? '指數' : '元'}</text>`);
+  }
+
+  // X 軸年份
+  const yr0 = +m.range.from.slice(0, 4);
+  const yr1 = +E.fromDayNumber(xMax).slice(0, 4);
+  const maxTicks = Math.max(3, Math.floor(iw / 70));
+  const step = [1, 2, 5, 10, 20].find((s) => (yr1 - yr0) / s <= maxTicks) || 20;
+  const axisY = CM.t + plotH;
+  for (let yr = Math.ceil(yr0 / step) * step; yr <= yr1; yr += step) {
+    const xv = x(E.dayNumber(`${yr}-01-01`));
+    if (xv < CM.l || xv > W - CM.r) continue;
+    parts.push(`<g class="axis"><line x1="${f(xv)}" x2="${f(xv)}" y1="${axisY}" y2="${axisY + 4}"/></g>
+      <text x="${f(xv)}" y="${axisY + 16}" text-anchor="middle">${yr}</text>`);
+  }
+  parts.push(`<g class="axis"><line x1="${CM.l}" x2="${W - CM.r}" y1="${axisY}" y2="${axisY}"/></g>`);
+
+  const todayN = E.dayNumber(m.T);
+  if (todayN >= xMin && todayN <= xMax) {
+    parts.push(`<g class="today"><line x1="${f(x(todayN))}" x2="${f(x(todayN))}" y1="${CM.t}" y2="${axisY}"/></g>
+      <text x="${f(x(todayN))}" y="${CM.t - 5}" text-anchor="middle">今日</text>`);
+  }
+
+  // 有價線段（stepped，不內插；非有價一律中斷）
+  for (const s of m.series) {
+    if (!s.visible) continue;
+    let prev = null;
+    for (const seg of s.segments) {
+      const v = seriesValue(s, seg);
+      if (v === null) continue;
+      const gx0 = x(E.dayNumber(seg.from));
+      const gx1 = x(Math.min(E.dayNumber(seg.to) + 1, xMax));
+      const gy = y(v);
+      const cls = `cmp-line s${s.slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
+      // 相鄰且價格不同才連垂直線；空窗與非有價區間之後 prev 已清空
+      if (prev && prev.nextX === gx0 && prev.y !== gy) {
+        parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx0)}" y1="${f(prev.y)}" y2="${f(gy)}"/>`);
+      }
+      parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx1)}" y1="${f(gy)}" y2="${f(gy)}"/>`);
+      prev = { nextX: gx1, y: gy, contiguous: seg.record.to !== null };
+      if (MARKER_TYPES.has(seg.record.eventType) && !seg.clippedLeft) {
+        parts.push(markerPath(s.slot, gx0, gy, seg));
+      }
+    }
+  }
+
+  // 狀態時間帶：每代號一條，沿同一 X 軸
+  m.series.forEach((s, i) => {
+    const by = axisY + 24 + i * (BAND_H + BAND_GAP);
+    parts.push(`<text class="band-label" x="${CM.l - 6}" y="${by + 11}" text-anchor="end">${esc(s.code.slice(0, 4))}…</text>`);
+    if (s.status !== 'ok') {
+      parts.push(`<rect class="cmp-band band-${s.status}" x="${CM.l}" y="${by}" width="${iw}" height="${BAND_H}">
+        <title>${esc(`${s.code}：${COMPARE_STATUS_TEXT[s.status]}`)}</title></rect>`);
+      return;
+    }
+    for (const b of s.bands) {
+      const bx0 = x(E.dayNumber(b.from));
+      const bx1 = x(Math.min(E.dayNumber(b.to) + 1, xMax));
+      parts.push(`<rect class="cmp-band band-k-${b.kind}${b.upcoming ? ' band-upcoming' : ''}${s.visible ? '' : ' band-hidden'}"
+        data-kind="${b.kind}" x="${f(bx0)}" y="${by}" width="${f(Math.max(1, bx1 - bx0))}" height="${BAND_H}">
+        <title>${esc(`${s.code} ${b.from} ～ ${b.to}：${b.tooltip}`)}</title></rect>`);
+    }
+  });
+
+  return `<div class="chart-wrap cmp-chart-wrap">
+    <svg class="chart cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="cmpTitle cmpDesc"
+      data-x-min="${m.range.from}" data-x-max="${E.fromDayNumber(xMax)}" data-plot-left="${CM.l}" data-plot-right="${W - CM.r}">
+      ${CHART_DEFS}
+      <title id="cmpTitle">多代號健保支付價走勢比較</title>
+      <desc id="cmpDesc">${esc(`${m.series.length} 個代號，${state.compareMode === 'rel' ? '相對變化指數' : '絕對金額'}模式；逐筆數值見下方表格。`)}</desc>
+      ${parts.join('')}
+      <line class="cmp-cross" x1="0" x2="0" y1="${CM.t}" y2="${axisY}" hidden/>
+      <rect class="cmp-hit" x="${CM.l}" y="${CM.t}" width="${iw}" height="${axisY - CM.t}" fill="transparent"/>
+    </svg>
+    <div id="compareCross" class="cross-tip" hidden></div>
+  </div>`;
+}
+
+function markerPath(slot, cx, cy, seg) {
+  const shape = ['circle', 'square', 'triangle', 'diamond'][slot];
+  const cls = `cmp-marker s${slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
+  const t = `<title>${esc(`${seg.record.from} ${seg.rawPrice} 元`)}</title>`;
+  if (shape === 'circle') return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4">${t}</circle>`;
+  if (shape === 'square') return `<rect class="${cls}" x="${(cx - 3.5).toFixed(1)}" y="${(cy - 3.5).toFixed(1)}" width="7" height="7">${t}</rect>`;
+  if (shape === 'triangle') {
+    return `<path class="${cls}" d="M${cx.toFixed(1)} ${(cy - 4.5).toFixed(1)}L${(cx + 4).toFixed(1)} ${(cy + 3.5).toFixed(1)}L${(cx - 4).toFixed(1)} ${(cy + 3.5).toFixed(1)}Z">${t}</path>`;
+  }
+  return `<path class="${cls}" d="M${cx.toFixed(1)} ${(cy - 5).toFixed(1)}L${(cx + 4).toFixed(1)} ${cy.toFixed(1)}L${cx.toFixed(1)} ${(cy + 5).toFixed(1)}L${(cx - 4).toFixed(1)} ${cy.toFixed(1)}Z">${t}</path>`;
+}
+
+/** §4.1.1：圖例必須分辨三種無線狀態，文案不得合併。 */
+function baselineText(s) {
+  if (state.compareMode !== 'rel') return '';
+  if (s.status !== 'ok') return '';
+  if (s.baseline.kind === 'none') return '無有價紀錄';
+  if (s.baseline.kind === 'undeterminable') return '有有價紀錄，但基準無法判定';
+  const inWindow = s.segments && s.segments.length > 0;
+  return inWindow
+    ? `基準 ${s.baseline.date}／${s.baseline.rawPrice} 元`
+    : `此區間無有價紀錄（基準 ${s.baseline.date}／${s.baseline.rawPrice} 元）`;
+}
+
+function compareLegendHTML(m) {
+  return `<ul class="cmp-legend">${m.series.map((s) => {
+    const meta = s.status === 'ok' ? E.selectMeta(s.entry, m.T) : null;
+    const summary = s.status === 'ok' ? E.summaryAt(s.records, m.T) : null;
+    const now = summary ? E.currentLabel({ ...summary, pricedBefore: summary.current ? E.pricedBefore(s.records, summary.current) : null }) : COMPARE_STATUS_TEXT[s.status];
+    return `<li class="cmp-legend-item" data-slot="${s.slot + 1}" data-code="${esc(s.code)}" data-visible="${s.visible}">
+      <button type="button" data-action="cmp-toggle" data-code="${esc(s.code)}"
+              aria-pressed="${s.visible}" title="${s.visible ? '點擊隱藏此序列' : '點擊顯示此序列'}">
+        <span class="cmp-swatch" aria-hidden="true"></span>
+        <span class="mono">${esc(s.code)}</span>
+        <span class="cmp-legend-name">${esc(meta?.chName ?? '')}</span>
+        <span class="cmp-legend-state">${esc(now)}</span>
+        ${baselineText(s) ? `<span class="cmp-legend-base">${esc(baselineText(s))}</span>` : ''}
+        ${s.visible ? '' : '<span class="cmp-legend-state">（已隱藏）</span>'}
+      </button>
+    </li>`;
+  }).join('')}</ul>`;
+}
+
+function compareControlsHTML() {
+  const presets = [['all', '全部'], ['y10', '近 10 年'], ['y5', '近 5 年'], ['y3', '近 3 年']];
+  const modes = [['abs', '絕對金額'], ['rel', '相對變化']];
+  return `<div class="cmp-controls">
+    <div class="cmp-group" role="group" aria-label="顯示區間">
+      ${presets.map(([v, t]) => `<button type="button" data-action="cmp-preset" data-preset="${v}"
+        aria-pressed="${state.comparePreset === v}">${t}</button>`).join('')}
+    </div>
+    <div class="cmp-group" role="group" aria-label="Y 軸模式">
+      ${modes.map(([v, t]) => `<button type="button" data-action="cmp-mode" data-mode="${v}"
+        aria-pressed="${state.compareMode === v}">${t}</button>`).join('')}
+    </div>
+    ${state.compareMode === 'rel' ? '<span class="hint">相對於各自基準＝100；不同品項之間不可比價。</span>' : ''}
+  </div>`;
+}
+
+/** crosshair：單一 tooltip 列出**所有**選定代號，含已隱藏者（隱藏是視覺操作，不是移除）。 */
+function crosshairRowsHTML(day) {
+  const items = state.compare.items;
+  return `<div class="cross-day mono">${esc(day)}</div>${items.map((x) => {
+    const d = state.compareData.get(x.code) || { status: 'loading' };
+    const hidden = state.compareHidden.has(x.code);
+    const text = d.status === 'ok'
+      ? E.dayState(d.entry.records, day).tooltip
+      : COMPARE_STATUS_TEXT[d.status];
+    return `<div class="cross-row" data-slot="${x.slot + 1}" data-code="${esc(x.code)}">
+      <span class="cmp-swatch" aria-hidden="true"></span>
+      <span class="mono">${esc(x.code)}</span>
+      <span>${esc(text)}${hidden ? '（已隱藏）' : ''}</span>
+    </div>`;
+  }).join('')}`;
+}
+
+function moveCrosshair(clientX) {
+  const svg = document.querySelector('.cmp-chart');
+  const tip = $('compareCross');
+  if (!svg || !tip) return;
+  const box = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const left = Number(svg.dataset.plotLeft);
+  const right = Number(svg.dataset.plotRight);
+  const vx = ((clientX - box.left) / box.width) * vb.width;
+  if (vx < left || vx > right) { hideCrosshair(); return; }
+  const x0 = E.dayNumber(svg.dataset.xMin);
+  const x1 = E.dayNumber(svg.dataset.xMax);
+  const day = E.fromDayNumber(Math.round(x0 + ((vx - left) / (right - left)) * (x1 - x0)));
+  const line = svg.querySelector('.cmp-cross');
+  line.setAttribute('x1', vx.toFixed(1));
+  line.setAttribute('x2', vx.toFixed(1));
+  line.removeAttribute('hidden');
+  tip.innerHTML = crosshairRowsHTML(day);
+  tip.hidden = false;
+  tip.dataset.day = day;
+}
+
+function hideCrosshair() {
+  const line = document.querySelector('.cmp-cross');
+  if (line) line.setAttribute('hidden', '');
+  const tip = $('compareCross');
+  if (tip) { tip.hidden = true; delete tip.dataset.day; }
+}
+
 // ── 事件 ────────────────────────────────────────────────────────
 function bind() {
   const q = $('q');
@@ -1262,6 +1544,17 @@ function bind() {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       navigate(el.dataset.code);
+    } else if (action === 'cmp-preset') {
+      state.comparePreset = el.dataset.preset;      // preset 只裁切視窗，不改 T 與基準
+      renderCompare();
+    } else if (action === 'cmp-mode') {
+      state.compareMode = el.dataset.mode;
+      renderCompare();
+    } else if (action === 'cmp-toggle') {
+      const code = el.dataset.code;
+      if (state.compareHidden.has(code)) state.compareHidden.delete(code);
+      else state.compareHidden.add(code);
+      renderCompare();
     } else if (action === 'add-compare') {
       e.preventDefault();
       addCompare(el.dataset.code);
@@ -1309,6 +1602,16 @@ function bind() {
   }
   $('upQ').addEventListener('input', (e) => { if (!e.isComposing) scheduleUpcomingRender(); });
   $('upQ').addEventListener('compositionend', scheduleUpcomingRender);
+
+  // crosshair：滑鼠移動定位；觸控裝置改為點擊定位、再點空白處取消
+  $('compareBody').addEventListener('mousemove', (e) => {
+    if (e.target.closest('.cmp-chart')) moveCrosshair(e.clientX);
+  });
+  $('compareBody').addEventListener('mouseleave', hideCrosshair);
+  $('compareBody').addEventListener('click', (e) => {
+    if (e.target.closest('.cmp-chart')) moveCrosshair(e.clientX);
+    else if (!e.target.closest('.cross-tip')) hideCrosshair();
+  });
 
   window.addEventListener('popstate', route);
 
