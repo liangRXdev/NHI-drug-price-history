@@ -19,7 +19,7 @@
 - [x] Phase 3：`TFDA-drug-info-search` 健保代號表新增「健保藥價歷史 → 查看 ↗」欄（2026-09-12，`62de833`，線上端到端驗證通過）
 - [x] Phase 5 多代號比較（`spec-compare.md`）：比較籃／多序列圖表／狀態時間帶／摘要對照表／
       合併事件表／CSV／失敗矩陣（驗收紀錄：[`.ai-review/compare-acceptance.md`](.ai-review/compare-acceptance.md)；
-      M17 情境 A 未達標待決策、藥師目檢待執行）
+      藥師目檢 6 項通過；M17 情境 A 未達標待決策）
 - [x] Phase 4 預告中心（`spec-upcoming.md`）：`data/upcoming.json`、`?view=upcoming` 清單、事件標籤、篩選排序分組、CSV 匯出（驗收紀錄：[`.ai-review/upcoming-acceptance.md`](.ai-review/upcoming-acceptance.md)；藥師目檢待執行）
 
 ## 資料語意（摘要）
