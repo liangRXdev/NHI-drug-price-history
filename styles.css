@@ -330,6 +330,18 @@ table.history .cell-state { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 [data-slot="3"] .cmp-swatch { background: var(--s3); }
 [data-slot="4"] .cmp-swatch { background: var(--s4); }
 
+.cmp-card { margin-top: 1rem; padding: 1rem; }
+.cmp-card h3 { font-size: 0.95rem; margin: 0 0 0.3rem; }
+.cmp-summary { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.cmp-summary th, .cmp-summary td { border: 1px solid var(--border); padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
+.cmp-summary thead th { background: #FAF8F4; position: sticky; top: 0; }
+.cmp-summary tbody th { background: #FAF8F4; white-space: nowrap; position: sticky; left: 0; }
+.cmp-summary .cmp-unavailable { color: var(--danger); }
+.cmp-events td, .cmp-events th { white-space: nowrap; }
+.cmp-events .row-focus { outline: 2px solid var(--accent); background: var(--accent-light); }
+tr.row-focus td { background: var(--accent-light); }
+.cmp-marker { cursor: pointer; }
+
 @media (max-width: 480px) {
   .wrap { padding: 1rem 0.75rem 3rem; }
   .card { padding: 1rem 0.85rem 1.2rem; }

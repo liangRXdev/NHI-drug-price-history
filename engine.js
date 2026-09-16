@@ -1166,3 +1166,94 @@ function splitCodes(raw) {
 export function serializeCompareCodes(items) {
   return items.map((x) => (typeof x === 'string' ? x : x.code)).join(',');
 }
+
+// 歷史表／合併事件表／CSV 共用的事件與異常文案（spec.md §8.3、spec-compare.md §5.2）
+export const EVENT_TEXT = {
+  initial: '最早紀錄', first_priced: '首次有價', increase: '調升', decrease: '調降',
+  unchanged: '同價續期', terminated: '終止支付', suspended: '暫停支付',
+  relisted: '恢復支付（跨越停止期間）', unknown: '變動無法判定',
+};
+export const INVALID_TEXT = { blank_start: '起日空白', invalid_date: '日期無法解析', inverted_interval: '起日晚於迄日' };
+
+export function eventText(r, prior) {
+  if (r.eventType === 'unchanged' && r.priceState !== 'priced') return '同狀態續期';
+  // 此前從未有價的 0 元：事件欄不得稱「終止」（spec.md §5.3）
+  if (r.eventType === 'terminated' && isUnpricedZero(r, prior)) return '0 元（此前無有價紀錄）';
+  return EVENT_TEXT[r.eventType] || r.eventType;
+}
+
+/**
+ * §5.2 合併事件時間表：所有選定代號的 records 依 `from` 合併排序。
+ * `series` = [{ code, slot, records, invalidRecords }]（只傳通過代號篩選者）。
+ *
+ * - 有效列：`from` asc → `code` asc → 原 `records` 索引 asc（newestFirst 時只反轉主鍵）
+ * - `invalidRecords` **一律置於全表末尾**（全表跨代號合併排序，不存在「該代號區塊末尾」），
+ *   其內部以 `code` asc → 原索引 asc
+ * - 每一列都能唯一回指來源紀錄（`code` ＋ `index` ＋ `invalid`），供 M15 的守恆驗證
+ */
+export function mergedEvents(series, { newestFirst = true } = {}) {
+  const valid = [];
+  const invalid = [];
+  for (const s of series) {
+    const priors = priorPrices(s.records || []);
+    (s.records || []).forEach((r, index) => valid.push({
+      code: s.code, slot: s.slot, index, record: r, invalid: false, prior: priors.get(r) ?? null,
+    }));
+    (s.invalidRecords || []).forEach((r, index) => invalid.push({ code: s.code, slot: s.slot, index, record: r, invalid: true }));
+  }
+  valid.sort((a, b) => (a.record.from < b.record.from ? -1 : a.record.from > b.record.from ? 1
+    : a.code < b.code ? -1 : a.code > b.code ? 1 : a.index - b.index));
+  if (newestFirst) valid.reverse();
+  invalid.sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : a.index - b.index));
+  return [...valid, ...invalid];
+}
+
+const CSV_CRLF = '\r\n';
+export const COMPARE_CSV_HEADER = ['生效日', '迄日', '代號', '品名', '支付價', '原始支付價字串',
+  '與前次差額', '變動%', '狀態', '備註'];
+
+/**
+ * §5.3 CSV：內容＝合併事件表**目前篩選後**的列，與畫面所見一致。
+ * `rows` 為 mergedEvents() 的結果；`names` 為 code → 品名。
+ */
+export function compareCSV(rows, { codes, today, filterNote = '', names = {} }) {
+  const preamble = '健保藥價歷史查詢 — 多代號比較匯出。'
+    + '資料來源：中央健康保險署「健保用藥品項查詢項目檔」（A21030000I-E41001-001）。'
+    + `比較代號：${codes.join('、')}；參考日期 ${today}${filterNote ? `；${filterNote}` : ''}。`
+    + '本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。'
+    + '不同健保代號代表不同給付品項；並列呈現不表示品項可互相替代，亦不構成任何採購或換藥建議。';
+
+  const lines = [csvField(preamble), COMPARE_CSV_HEADER.map(csvField).join(',')];
+  for (const row of rows) {
+    const r = row.record;
+    lines.push([
+      row.invalid ? r.rawFrom : r.from,
+      row.invalid ? r.rawTo : (r.to ?? ''),
+      row.code,
+      names[row.code] ?? '',
+      row.invalid ? '' : stateLabel(r, row.prior, 'cell'),
+      r.rawPrice,
+      row.invalid ? '' : fmtCsvNumber(r.absoluteChange),
+      row.invalid ? '' : fmtCsvNumber(r.percentChange),
+      row.invalid ? '日期異常' : eventText(r, row.prior),
+      row.invalid ? `日期異常（${INVALID_TEXT[r.error] || r.error}）` : eventNote(r, today),
+    ].map(csvField).join(','));
+  }
+  return `﻿${lines.join(CSV_CRLF)}${CSV_CRLF}`;
+}
+
+function fmtCsvNumber(x) {
+  if (x === null || x === undefined) return '';
+  const two = x.toFixed(2);
+  return Number(two) === x ? two : String(x);
+}
+
+function eventNote(r, today) {
+  const notes = [];
+  if (r.from > today) notes.push('預告');
+  if (r.crossesStop) notes.push('跨越停止期間');
+  if ((r.flags || []).includes('gap_before')) notes.push('前有空窗');
+  if ((r.flags || []).includes('overlap')) notes.push('重疊');
+  if ((r.flags || []).includes('conflicting_price_interval')) notes.push('同期間有不同支付價');
+  return notes.join('；');
+}

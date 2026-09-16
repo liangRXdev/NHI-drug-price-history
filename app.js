@@ -40,6 +40,8 @@ const state = {
   comparePreset: 'all',
   compareMode: 'abs',
   compareHidden: new Set(),        // 可見性只影響主圖與 band，不影響選取集合（§4.2.1）
+  compareTableFilter: new Set(),   // 表格篩選與可見性彼此獨立
+  compareNewestFirst: true,
   shardInflight: new Map(),
 };
 
@@ -633,20 +635,9 @@ function legend(m) {
 }
 
 // ── 歷史表（spec §8.3、E3）──────────────────────────────────────
-const EVENT_TEXT = {
-  initial: '最早紀錄', first_priced: '首次有價', increase: '調升', decrease: '調降',
-  unchanged: '同價續期', terminated: '終止支付', suspended: '暫停支付',
-  relisted: '恢復支付（跨越停止期間）', unknown: '變動無法判定',
-};
-const INVALID_TEXT = { blank_start: '起日空白', invalid_date: '日期無法解析', inverted_interval: '起日晚於迄日' };
+// 事件與異常文案已移入 engine.js：比較頁的 CSV 也要用同一份，否則畫面與匯出會漂移
+const { EVENT_TEXT, INVALID_TEXT, eventText } = E;
 const CHANGE_TYPES = new Set(['increase', 'decrease', 'relisted']);
-
-function eventText(r, prior) {
-  if (r.eventType === 'unchanged' && r.priceState !== 'priced') return '同狀態續期';
-  // 此前從未有價的 0 元：事件欄不得稱「終止」（§5.3，codex R3）
-  if (r.eventType === 'terminated' && E.isUnpricedZero(r, prior)) return '0 元（此前無有價紀錄）';
-  return EVENT_TEXT[r.eventType] || r.eventType;
-}
 
 function renderTable(entry, T) {
   const priors = E.priorPrices(entry.records);
@@ -1190,7 +1181,8 @@ function renderCompare() {
     ? '<div class="skeleton cmp-skeleton" aria-hidden="true"></div><p class="search-status">圖表載入中…</p>'
     : `${compareControlsHTML()}${compareChartHTML(model)}${compareLegendHTML(model)}`;
   // 選定集合的每一個代號都要被交代，含異常者（§6.1）
-  $('compareBody').innerHTML = chart + `<ul class="compare-codes">${items.map((x) => {
+  const tables = loading ? '' : `${compareSummaryHTML(model)}${compareTableHTML(model)}<p id="compareRowNote" class="search-status"></p>`;
+  $('compareBody').innerHTML = chart + tables + `<ul class="compare-codes">${items.map((x) => {
     const d = state.compareData.get(x.code) || { status: 'loading' };
     const drug = state.byCode?.get(x.code);
     const name = d.status === 'ok' ? (E.selectMeta(d.entry, state.today)?.chName ?? drug?.chName ?? '') : '';
@@ -1368,7 +1360,7 @@ function compareChartHTML(m) {
       parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx1)}" y1="${f(gy)}" y2="${f(gy)}"/>`);
       prev = { nextX: gx1, y: gy, contiguous: seg.record.to !== null };
       if (MARKER_TYPES.has(seg.record.eventType) && !seg.clippedLeft) {
-        parts.push(markerPath(s.slot, gx0, gy, seg));
+        parts.push(markerPath(s.slot, gx0, gy, seg, s.code, s.records.indexOf(seg.record)));
       }
     }
   }
@@ -1405,10 +1397,10 @@ function compareChartHTML(m) {
   </div>`;
 }
 
-function markerPath(slot, cx, cy, seg) {
+function markerPath(slot, cx, cy, seg, code, index) {
   const shape = ['circle', 'square', 'triangle', 'diamond'][slot];
-  const cls = `cmp-marker s${slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
-  const t = `<title>${esc(`${seg.record.from} ${seg.rawPrice} 元`)}</title>`;
+  const cls = `cmp-marker s${slot + 1}${seg.upcoming ? ' upcoming' : ''}" data-code="${esc(code)}" data-index="${index}`;
+  const t = `<title>${esc(`${code} ${seg.record.from} ${seg.rawPrice} 元`)}</title>`;
   if (shape === 'circle') return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4">${t}</circle>`;
   if (shape === 'square') return `<rect class="${cls}" x="${(cx - 3.5).toFixed(1)}" y="${(cy - 3.5).toFixed(1)}" width="7" height="7">${t}</rect>`;
   if (shape === 'triangle') {
@@ -1510,6 +1502,144 @@ function hideCrosshair() {
   if (tip) { tip.hidden = true; delete tip.dataset.day; }
 }
 
+// ── 比較表格與匯出（spec-compare.md §5）──────────────────────────
+// §5.1 本表**不得**出現任何跨欄的合計、平均、差額或排名；同代號自身的歷次差額照常呈現。
+const SUMMARY_ROWS = [
+  ['中文品名', (s) => s.meta?.chName ?? ''],
+  ['英文品名', (s) => s.meta?.enName ?? ''],
+  ['成分', (s) => s.meta?.ingredient ?? ''],
+  ['規格', (s) => (s.meta?.strength ? `${s.meta.strength}${s.meta.strengthUnit ? ` ${s.meta.strengthUnit}` : ''}` : '')],
+  ['劑型', (s) => s.meta?.dosageForm ?? ''],
+  ['ATC', (s) => s.meta?.atcCode ?? ''],
+  ['藥商', (s) => s.meta?.manufacturer ?? ''],
+  ['現行支付價', (s) => E.currentLabel({ ...s.summary, pricedBefore: s.summary.current ? E.pricedBefore(s.records, s.summary.current) : null })],
+  ['預告', (s) => (s.summary.upcoming ? E.upcomingLabel(s.summary.upcoming, E.pricedBefore(s.records, s.summary.upcoming)) : '無已公告的預告異動')],
+  ['最早可取得紀錄日期', (s) => s.records.find((r) => r.from <= state.today)?.from ?? '—'],
+  ['歷史調價次數', (s) => `${s.summary.priceChangeCount} 次`],
+  ['最近一次調整', (s) => E.latestEventLabel(s.summary.latestEvent)],
+  ['總變化', (s) => E.totalChangeLabel(s.summary)],
+  ['品質提示', (s) => {
+    const flags = (s.entry.flags || []).map((f) => E.UPCOMING_FLAG_TEXT[f] || f);
+    if (s.entry.invalidRecords?.length) flags.push(`該代號有 ${s.entry.invalidRecords.length} 列日期異常`);
+    return flags.join('；') || '無';
+  }],
+];
+
+function compareSummaryHTML(m) {
+  const cols = m.series.map((s) => {
+    if (s.status !== 'ok') return { ...s, unavailable: COMPARE_STATUS_TEXT[s.status] };
+    return { ...s, meta: E.selectMeta(s.entry, m.T), summary: E.summaryAt(s.records, m.T) };
+  });
+  const head = cols.map((s) => `<th scope="col" data-slot="${s.slot + 1}">
+    <span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(s.code)}</span></th>`).join('');
+  const body = SUMMARY_ROWS.map(([label, get]) => `<tr><th scope="row">${esc(label)}</th>${cols.map((s) => {
+    // 非成功代號：欄位保留、值改為取得狀態，不得填 0、不得留白、不得沿用其他代號
+    const v = s.unavailable ? s.unavailable : (get(s) || '—');
+    return `<td${s.unavailable ? ' class="cmp-unavailable"' : ''}>${esc(v)}</td>`;
+  }).join('')}</tr>`).join('');
+  const links = cols.map((s) => `<td><a href="?code=${encodeURIComponent(s.code)}" data-code="${esc(s.code)}" data-action="to-detail">查看完整歷史 ↗</a></td>`).join('');
+  return `<section class="card cmp-card"><h3>摘要對照</h3>
+    <p class="hint">參考日期 <span class="mono">${esc(m.T)}</span>（依您裝置的日期）。本表不做任何跨品項的合計、平均或排名。</p>
+    <div class="table-wrap"><table class="cmp-summary">
+      <thead><tr><th scope="col">指標</th>${head}</tr></thead>
+      <tbody>${body}<tr><th scope="row">完整歷史</th>${links}</tr></tbody>
+    </table></div></section>`;
+}
+
+/** §5.2 的代號篩選與 §4.2.1 的可見性**彼此獨立**，各有自己的控制項。 */
+function tableSeries(m) {
+  return m.series.filter((s) => s.status === 'ok' && !state.compareTableFilter.has(s.code))
+    .map((s) => ({ code: s.code, slot: s.slot, records: s.records, invalidRecords: s.entry.invalidRecords || [] }));
+}
+
+function compareTableHTML(m) {
+  const rows = E.mergedEvents(tableSeries(m), { newestFirst: state.compareNewestFirst });
+  const missing = m.series.filter((s) => s.status !== 'ok');
+  const filtered = m.series.filter((s) => s.status === 'ok' && state.compareTableFilter.has(s.code));
+  const names = Object.fromEntries(m.series.map((s) => [s.code, s.status === 'ok' ? (E.selectMeta(s.entry, m.T)?.chName ?? '') : '']));
+  const note = [
+    missing.length ? `不含 ${missing.length} 個尚未取得資料的品項（${missing.map((s) => s.code).join('、')}）` : '',
+    filtered.length ? `已篩除 ${filtered.map((s) => s.code).join('、')}` : '',
+  ].filter(Boolean).join('；');
+
+  return `<section class="card cmp-card"><h3>合併事件時間表（${rows.length} 列）</h3>
+    ${note ? `<p class="hint">${esc(note)}</p>` : ''}
+    <div class="table-tools">
+      <div class="cmp-group" role="group" aria-label="表格代號篩選">
+        ${m.series.filter((s) => s.status === 'ok').map((s) => `<button type="button" data-action="cmp-filter" data-code="${esc(s.code)}"
+          aria-pressed="${!state.compareTableFilter.has(s.code)}">${esc(s.code)}</button>`).join('')}
+      </div>
+      <button type="button" data-action="cmp-sort" aria-pressed="${state.compareNewestFirst}">排序：${state.compareNewestFirst ? '新 → 舊' : '舊 → 新'}</button>
+      <button type="button" id="cmpCsv" data-action="cmp-csv" ${compareComplete() ? '' : 'disabled title="部分品項尚未載入完成"'}>匯出 CSV</button>
+    </div>
+    <div class="table-wrap"><table class="history cmp-events">
+      <thead><tr><th>生效日</th><th>迄日</th><th>代號</th><th>品名</th><th>支付價</th>
+        <th>與前次差額</th><th>變動 %</th><th>狀態</th></tr></thead>
+      <tbody>${rows.map((row) => eventRowHTML(row, names[row.code], m.T)).join('')}</tbody>
+    </table></div></section>`;
+}
+
+function eventRowHTML(row, name, T) {
+  const r = row.record;
+  const id = `${row.code}-${row.invalid ? 'x' : 'r'}${row.index}`;
+  if (row.invalid) {
+    return `<tr class="invalid-row" data-row="${id}" data-slot="${row.slot + 1}">
+      <td class="mono">${esc(r.rawFrom || '—')}</td><td class="mono">${esc(r.rawTo || '—')}</td>
+      <td><span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(row.code)}</span></td>
+      <td>${esc(name || '')}</td><td>${esc(r.rawPrice)}</td><td>—</td><td>—</td>
+      <td>日期異常（${esc(E.INVALID_TEXT[r.error] || r.error)}）</td></tr>`;
+  }
+  const notes = [];
+  if (r.from > T) notes.push('預告');
+  if (r.crossesStop) notes.push('跨越停止期間');
+  if ((r.flags || []).includes('gap_before')) notes.push('前有空窗');
+  return `<tr data-row="${id}" data-slot="${row.slot + 1}"${r.from > T ? ' class="upcoming-row-tr"' : ''}>
+    <td class="mono">${esc(r.from)}</td><td class="mono">${esc(r.to ?? '—')}</td>
+    <td><span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(row.code)}</span></td>
+    <td>${esc(name || '')}</td>
+    <td>${esc(E.stateLabel(r, row.prior, 'cell'))}</td>
+    <td class="num">${esc(r.absoluteChange === null ? '—' : E.fmtSigned(E.fmtMoney(r.absoluteChange)))}</td>
+    <td class="num">${esc(r.percentChange === null ? '—' : E.fmtPct(r.percentChange))}</td>
+    <td>${esc(E.eventText(r, row.prior))}${notes.length ? `（${esc(notes.join('、'))}）` : ''}</td></tr>`;
+}
+
+function exportCompareCSV() {
+  const m = compareModel();
+  if (!compareComplete()) return;                 // 未完整成功時停用匯出（§5.3）
+  const series = tableSeries(m);
+  const rows = E.mergedEvents(series, { newestFirst: state.compareNewestFirst });
+  const names = Object.fromEntries(m.series.map((s) => [s.code, s.status === 'ok' ? (E.selectMeta(s.entry, m.T)?.chName ?? '') : '']));
+  const filteredOut = m.series.filter((s) => state.compareTableFilter.has(s.code)).map((s) => s.code);
+  const csv = E.compareCSV(rows, {
+    codes: series.map((s) => s.code),
+    today: m.T,
+    names,
+    filterNote: filteredOut.length ? `已篩除 ${filteredOut.join('、')}` : '',
+  });
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `nhi_compare_${series.map((s) => s.code).join('_')}_${m.T}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** 點擊圖上 marker → 捲動至對應列並高亮；該列已被篩選隱藏時明說，不自動解除篩選。 */
+function focusEventRow(code, index) {
+  const row = document.querySelector(`[data-row="${CSS.escape(`${code}-r${index}`)}"]`);
+  const note = $('compareRowNote');
+  if (!row) {
+    note.textContent = '該列已被目前的表格篩選隱藏。';
+    return;
+  }
+  note.textContent = '';
+  for (const el of document.querySelectorAll('.row-focus')) el.classList.remove('row-focus');
+  row.classList.add('row-focus');
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
 // ── 事件 ────────────────────────────────────────────────────────
 function bind() {
   const q = $('q');
@@ -1544,6 +1674,16 @@ function bind() {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       navigate(el.dataset.code);
+    } else if (action === 'cmp-filter') {
+      const code = el.dataset.code;
+      if (state.compareTableFilter.has(code)) state.compareTableFilter.delete(code);
+      else state.compareTableFilter.add(code);
+      renderCompare();
+    } else if (action === 'cmp-sort') {
+      state.compareNewestFirst = !state.compareNewestFirst;
+      renderCompare();
+    } else if (action === 'cmp-csv') {
+      exportCompareCSV();
     } else if (action === 'cmp-preset') {
       state.comparePreset = el.dataset.preset;      // preset 只裁切視窗，不改 T 與基準
       renderCompare();
@@ -1609,6 +1749,8 @@ function bind() {
   });
   $('compareBody').addEventListener('mouseleave', hideCrosshair);
   $('compareBody').addEventListener('click', (e) => {
+    const marker = e.target.closest('.cmp-marker');
+    if (marker) focusEventRow(marker.dataset.code, Number(marker.dataset.index));
     if (e.target.closest('.cmp-chart')) moveCrosshair(e.clientX);
     else if (!e.target.closest('.cross-tip')) hideCrosshair();
   });
