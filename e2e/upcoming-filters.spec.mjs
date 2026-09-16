@@ -30,10 +30,11 @@ const withItems = (items = ITEMS, buildDate = '2026-09-11') => {
   return data;
 };
 
-const open = async (page, { url = '/?view=upcoming', today = '2026-09-11', items, buildDate, ...rest } = {}) => {
+const open = async (page, { url = '/?view=upcoming', today = '2026-09-11', items, buildDate, controls = true, ...rest } = {}) => {
   await mockSite(page, { today, data: withItems(items, buildDate), ...rest });
   await page.goto(url);
-  await expect(page.locator('#upcomingControls')).toBeVisible();
+  // 空清單時沒有可篩選的內容，控制項一併收起
+  await expect(page.locator('#upcomingControls')).toBeVisible({ visible: controls });
 };
 
 const shownCodes = async (page) => (await codes(page).allTextContents()).map((s) => s.trim());
@@ -213,7 +214,7 @@ test('U8 全數到期：仍列出全部，不得顯示為空白頁', async ({ pa
 });
 
 test('U8 真正空清單與全數到期是兩種畫面', async ({ page }) => {
-  await open(page, { items: [], today: '2026-09-11' });
+  await open(page, { items: [], today: '2026-09-11', controls: false });
   await expect(status(page)).toHaveText('目前資料中無未生效的公告。');
   await expect(rows(page)).toHaveCount(0);
 });

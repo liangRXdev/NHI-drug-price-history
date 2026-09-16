@@ -797,3 +797,95 @@ export function upcomingModel(items, params) {
   }
   return { total: items.length, rows, groups };
 }
+
+// ── 預告清單 CSV 匯出（spec-upcoming §5.4）──────────────────────
+export const UPCOMING_CSV_HEADER = ['生效日', '代號', '中文品名', '英文品名', '成分', '規格',
+  '劑型', 'ATC', '藥商', '事件', '變動前支付價', '變動後支付價', '差額', '變動%',
+  '原始支付價字串', '備註'];
+
+const CRLF = '\r\n';
+
+/** RFC 4180：含逗號、引號、換行者加引號，內部引號重複一次。其餘逐字輸出。 */
+export function csvField(value) {
+  const s = value === null || value === undefined ? '' : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+const csvRow = (fields) => fields.map(csvField).join(',');
+
+const TYPE_TEXT = {
+  all: '全部', decrease: '調降', increase: '調升', terminated: '終止支付',
+  suspended: '暫停支付', relisted: '恢復支付', first_priced: '首次有價／0 元',
+  unchanged: '續期（支付價不變）', other: '無法判定／資料異常',
+};
+const SORT_TEXT = { date_asc: '生效日近→遠', date_desc: '生效日遠→近', change_desc: '變動幅度大→小' };
+
+export function describeUpcomingFilters(p) {
+  const parts = [`事件型別＝${TYPE_TEXT[p.type] || p.type}`];
+  if (p.atc) parts.push(`ATC＝${p.atc}`);
+  if (p.date) parts.push(`生效日＝${p.date}`);
+  if (p.q) parts.push(`關鍵字＝${p.q}`);
+  parts.push(`排序＝${SORT_TEXT[p.sort] || p.sort}`);
+  return parts.join('，');
+}
+
+/** 變動前支付價（§4.2）：停止狀態取該列之前最後一個有價金額，有價列取前一筆有價金額。 */
+function priorAmount(it) {
+  return it.priceState === 'priced' ? it.previousPrice : it.pricedBefore;
+}
+
+/**
+ * → CSV 字串（含 BOM、CRLF、前言一行＋標頭一行）。匯出的是**目前篩選後**的結果。
+ * `rows` 為 upcomingModel() 的 rows（帶 dec），順序與畫面一致。
+ */
+export function upcomingCSV(rows, { buildDate, params, today, staleNote = '' }) {
+  const preamble = '健保藥價歷史查詢 — 預告清單匯出。'
+    + '資料來源：中央健康保險署「健保用藥品項查詢項目檔」（A21030000I-E41001-001）。'
+    + `資料產生日 ${buildDate}；檢視日期 ${today}；篩選條件：${describeUpcomingFilters(params)}。`
+    + (staleNote ? `${staleNote}。` : '')
+    + '本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。'
+    + '預告內容以健保署最新公告為準。';
+
+  const lines = [csvRow([preamble]), csvRow(UPCOMING_CSV_HEADER)];
+  for (const { it, dec } of rows) {
+    const notes = [];
+    if (it.effectiveDate <= today) notes.push('已生效（本站資料尚未重建）');
+    for (const f of it.flags || []) notes.push(UPCOMING_FLAG_TEXT[f] || f);
+    lines.push(csvRow([
+      it.effectiveDate,
+      it.code,
+      it.chName,
+      it.enName,
+      it.ingredient,
+      [it.strength, it.strengthUnit].filter(Boolean).join(' '),
+      it.dosageForm,
+      it.atcCode,
+      it.manufacturer,
+      dec.label,
+      fmtAmount(priorAmount(it)),
+      fmtAmount(it.price),
+      fmtAmount(it.absoluteChange),
+      fmtAmount(it.percentChange),
+      it.rawPrice,                       // 逐字輸出：12.50 不得變成 12.5、0.00 不得變成 0
+      notes.join('；'),
+    ]));
+  }
+  return `﻿${lines.join(CRLF)}${CRLF}`;
+}
+
+/** CSV 內的金額一律用 ASCII 負號與 2 位小數；null 輸出空欄。 */
+function fmtAmount(x) {
+  if (x === null || x === undefined) return '';
+  const two = x.toFixed(2);
+  return Number(two) === x ? two : String(x);
+}
+
+export const UPCOMING_FLAG_TEXT = {
+  gap: '有支付空窗',
+  overlap: '來源區間重疊',
+  conflict: '來源紀錄衝突',
+  conflicting_price_interval: '同期間有不同支付價',
+  invalid_records: '含日期異常紀錄',
+  question_mark: '品名含「?」（來源缺字）',
+  inconsistent_metadata: '描述欄位不一致',
+};

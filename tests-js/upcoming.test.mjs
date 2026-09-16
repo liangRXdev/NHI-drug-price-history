@@ -7,7 +7,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { upcomingDecision, validateUpcoming, upcomingPendingCount, UPCOMING_GENERATOR_VERSION } from '../engine.js';
+import {
+  upcomingDecision, validateUpcoming, upcomingPendingCount, UPCOMING_GENERATOR_VERSION,
+  upcomingParams, upcomingModel, upcomingCSV, csvField, UPCOMING_CSV_HEADER,
+} from '../engine.js';
 
 const front = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_2026-09-11.json', import.meta.url), 'utf8'));
 
@@ -178,4 +181,118 @@ test('徽章數字只算仍未生效的列', () => {
   assert.equal(upcomingPendingCount(items, '2026-09-11'), 2);
   assert.equal(upcomingPendingCount(items, '2026-10-01'), 1);
   assert.equal(upcomingPendingCount(items, '2026-11-02'), 0);
+});
+
+// ── U12 CSV 匯出（§5.4）─────────────────────────────────────────
+/** 最小 RFC 4180 解析器：驗匯出的是可正確解回的檔案，不是「看起來像 CSV」。 */
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i += 1; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\r' && text[i + 1] === '\n') { row.push(field); rows.push(row); row = []; field = ''; i += 1; }
+    else field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+const CSV_ITEMS = [
+  item({ code: 'Q000000001', chName: '含,逗號與"引號"的品名', enName: 'LINE1\nLINE2',
+    ingredient: '', strength: '10', strengthUnit: 'MG', dosageForm: '錠劑', atcCode: 'A01AA01',
+    manufacturer: '測試藥廠', effectiveDate: '2026-10-01', priceState: 'priced', price: 12.5,
+    rawPrice: '12.50', previousPrice: 10, pricedBefore: 10, previousState: 'priced',
+    everPriced: true, eventType: 'increase', absoluteChange: 2.5, percentChange: 25 }),
+  item({ code: 'Q000000002', chName: '零元藥', effectiveDate: '2026-10-01', rawPrice: '0.00',
+    eventType: 'terminated', previousState: 'priced', everPriced: true, pricedBefore: 245,
+    previousPrice: 245, flags: ['inconsistent_metadata'] }),
+  item({ code: 'Q000000003', chName: '暫停藥半形', effectiveDate: '2026-11-01', priceState: 'suspended',
+    rawPrice: '-', eventType: 'suspended', previousState: 'priced', everPriced: true,
+    pricedBefore: 18, previousPrice: 18 }),
+  item({ code: 'Q000000004', chName: '暫停藥全形', effectiveDate: '2026-11-01', priceState: 'suspended',
+    rawPrice: '－', eventType: 'unchanged', previousState: 'suspended', everPriced: true, pricedBefore: 18 }),
+  item({ code: 'Q000000005', chName: '暫停藥破折號', effectiveDate: '2026-11-01', priceState: 'suspended',
+    rawPrice: '—', eventType: 'unchanged', previousState: 'suspended', everPriced: true, pricedBefore: 18 }),
+  item({ code: 'Q000000006', chName: null, enName: null, ingredient: null, strength: null,
+    strengthUnit: null, dosageForm: null, atcCode: null, manufacturer: null,
+    effectiveDate: '2026-12-01', rawPrice: '', priceState: 'missing', eventType: 'initial' }),
+];
+
+const csvOf = (search = '', today = '2026-09-11') => {
+  const params = upcomingParams(search, CSV_ITEMS);
+  const model = upcomingModel(CSV_ITEMS, params);
+  return { text: upcomingCSV(model.rows, { buildDate: '2026-09-11', params, today }), model, params };
+};
+
+test('U12 檔案結構：BOM、前言一行、標頭一行，資料列與篩選結果逐列對應', () => {
+  const { text, model } = csvOf();
+  assert.ok(text.startsWith('﻿'), '缺 BOM');
+  const rows = parseCSV(text.slice(1));
+  assert.equal(rows.length, model.rows.length + 2);
+  assert.match(rows[0][0], /^健保藥價歷史查詢 — 預告清單匯出。/);
+  assert.equal(rows[0].length, 1);
+  assert.deepEqual(rows[1], UPCOMING_CSV_HEADER);
+
+  const data = rows.slice(2);
+  assert.deepEqual(data.map((r) => r[1]), model.rows.map((r) => r.it.code));      // 順序與重數
+  assert.deepEqual(data.map((r) => r[0]), model.rows.map((r) => r.it.effectiveDate));
+  assert.deepEqual(data.map((r) => r[9]), model.rows.map((r) => r.dec.label));
+  assert.deepEqual(data.map((r) => r[14]), model.rows.map((r) => r.it.rawPrice));
+});
+
+test('U12 原始支付價字串逐字保真（12.50 不變 12.5、0.00 不變 0、三種暫停標記）', () => {
+  const data = parseCSV(csvOf().text.slice(1)).slice(2);
+  assert.deepEqual(data.map((r) => r[14]), ['12.50', '0.00', '-', '－', '—', '']);
+});
+
+test('U12 逗號、引號、換行、中文依 RFC 4180 跳脫且可解回原值', () => {
+  const data = parseCSV(csvOf().text.slice(1)).slice(2);
+  assert.equal(data[0][2], '含,逗號與"引號"的品名');
+  assert.equal(data[0][3], 'LINE1\nLINE2');
+  assert.ok(csvOf().text.includes('"含,逗號與""引號""的品名"'));
+  assert.equal(data[1][2], '零元藥');
+});
+
+test('U12 空值輸出空欄；金額欄位 2 位小數', () => {
+  const data = parseCSV(csvOf().text.slice(1)).slice(2);
+  assert.deepEqual(data[5].slice(2, 9), ['', '', '', '', '', '', '']);   // 描述欄位為 null
+  assert.deepEqual(data[0].slice(10, 14), ['10.00', '12.50', '2.50', '25.00']);
+  assert.deepEqual(data[1].slice(10, 14), ['245.00', '', '', '']);       // 終止：無新價與差額
+});
+
+test('U12 備註欄帶到期標示與品質提示', () => {
+  const data = parseCSV(csvOf('', '2026-10-15').text.slice(1)).slice(2);
+  assert.equal(data[0][15], '已生效（本站資料尚未重建）');
+  assert.equal(data[1][15], '已生效（本站資料尚未重建）；描述欄位不一致');
+  assert.equal(data[2][15], '');
+});
+
+test('U12 匯出的是篩選後的結果，前言記錄篩選條件', () => {
+  const { text } = csvOf('?type=suspended');
+  const rows = parseCSV(text.slice(1));
+  assert.deepEqual(rows.slice(2).map((r) => r[1]), ['Q000000003', 'Q000000004', 'Q000000005']);
+  assert.match(rows[0][0], /篩選條件：事件型別＝暫停支付/);
+});
+
+test('U12 更新失敗時前言註明沿用舊快照', () => {
+  const params = upcomingParams('', CSV_ITEMS);
+  const text = upcomingCSV(upcomingModel(CSV_ITEMS, params).rows,
+    { buildDate: '2026-09-11', params, today: '2026-09-20', staleNote: '更新失敗，本檔沿用 2026-09-11 的資料' });
+  assert.match(parseCSV(text.slice(1))[0][0], /更新失敗，本檔沿用 2026-09-11 的資料。/);
+});
+
+test('csvField 只在必要時加引號', () => {
+  assert.equal(csvField('12.50'), '12.50');
+  assert.equal(csvField(null), '');
+  assert.equal(csvField('a,b'), '"a,b"');
+  assert.equal(csvField('a"b'), '"a""b"');
+  assert.equal(csvField('a\r\nb'), '"a\r\nb"');
 });

@@ -198,15 +198,8 @@ function renderSource() {
 }
 
 // ── 搜尋 ────────────────────────────────────────────────────────
-const FLAG_TEXT = {
-  gap: '有支付空窗',
-  overlap: '來源區間重疊',
-  conflict: '來源紀錄衝突',
-  invalid_records: '含日期異常紀錄',
-  question_mark: '品名含「?」（來源缺字）',
-  inconsistent_metadata: '描述欄位不一致',
-};
-const flagTags = (flags) => (flags || []).map((f) => `<span class="tag warn">${esc(FLAG_TEXT[f] || f)}</span>`).join('');
+// 品質提示文案與 CSV 備註欄共用同一份，避免兩處漂移
+const flagTags = (flags) => (flags || []).map((f) => `<span class="tag warn">${esc(E.UPCOMING_FLAG_TEXT[f] || f)}</span>`).join('');
 
 function upcomingTag(label) {
   if (!label) return '';
@@ -862,6 +855,29 @@ function upcomingRowHTML(it, dec = E.upcomingDecision(it)) {
   </div>`;
 }
 
+/** §5.4 匯出目前篩選後的結果；資料不可用（版本不符或內容不合法）時一併停用。 */
+function exportUpcomingCSV() {
+  const u = state.upcoming;
+  if (u.phase !== 'ready') return;
+  const items = u.payload.items;
+  const params = E.upcomingParams(new URLSearchParams(location.search), items);
+  const csv = E.upcomingCSV(E.upcomingModel(items, params).rows, {
+    buildDate: u.payload.buildDate,
+    params,
+    today: state.today,
+    // 保留舊快照時匯出沿用舊快照，並於檔頭註明（§5.5）
+    staleNote: u.updateFailed ? `更新失敗，本檔沿用 ${u.payload.buildDate} 的資料` : '',
+  });
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `nhi_upcoming_${u.payload.buildDate}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function showUpcoming() {
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
   state.current = null;
@@ -908,6 +924,8 @@ function bind() {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       navigate(el.dataset.code);
+    } else if (action === 'upcoming-csv') {
+      exportUpcomingCSV();
     } else if (action === 'retry-upcoming') {
       loadUpcoming({ force: true });
     } else if (action === 'retry-core') {

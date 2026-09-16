@@ -1,4 +1,5 @@
 // 預告中心前端驗收（spec-upcoming.md §9）：U10 四態與兩種失敗、U11 版本一致性。
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { buildData, mockSite } from './mock.mjs';
 
@@ -198,6 +199,27 @@ test('U13 行動裝置寬度下免責聲明全文可見', async ({ page }) => {
   const clipped = await note.evaluate((el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
   expect(clipped).toBe(false);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
+// ── U12 匯出（逐列逐欄斷言在 tests-js/upcoming.test.mjs）──────────
+test('U12 匯出檔名、BOM 與內容', async ({ page }) => {
+  await open(page);
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#upCsv').click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('nhi_upcoming_2026-09-11.csv');
+  const text = readFileSync(await download.path(), 'utf8');
+  expect(text.codePointAt(0)).toBe(0xfeff);
+  expect(text).toContain('AB47689100');
+  expect(text).toContain('7.90');
+  expect(text.split('\r\n').filter(Boolean)).toHaveLength(5);   // 前言＋標頭＋3 列
+});
+
+test('U12 資料不可用時匯出一併停用', async ({ page }) => {
+  await open(page, { upcoming: '404' });
+  await expect(page.locator('#upCsv')).toBeHidden();
+  await expect(page.locator('#upcomingControls')).toBeHidden();
 });
 
 // ── §6 與詳細頁的整合 ───────────────────────────────────────────

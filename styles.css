@@ -37,6 +37,8 @@
 }
 
 * { box-sizing: border-box; }
+/* display 規則會蓋掉 hidden 屬性的預設 display:none（#upcomingControls 為 flex） */
+[hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg-primary);
   font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
