@@ -42,6 +42,7 @@ const state = {
   compareHidden: new Set(),        // 可見性只影響主圖與 band，不影響選取集合（§4.2.1）
   compareTableFilter: new Set(),   // 表格篩選與可見性彼此獨立
   compareNewestFirst: true,
+  compareEverRendered: false,      // 本次選取集合是否已成功渲染過（決定重試時要不要退回骨架）
   shardInflight: new Map(),
 };
 
@@ -1086,6 +1087,7 @@ function renderCompareEntries() {
 const COMPARE_STATUS_TEXT = {
   invalid: '代號格式不正確',
   loading: '載入中',
+  retrying: '重試中',
   missing: '查無此代號',
   error: '資料載入失敗',
   ok: '',
@@ -1108,20 +1110,25 @@ function loadShard(prefix) {
   return inflight;
 }
 
+/** `only`：只重載這些代號（重試）；null 代表整批重載。重試一律一次處理完所有失敗代號，
+ *  否則同片的兩個代號會各觸發一次 loadCompareData，產生沒必要的第二個請求。 */
 async function loadCompareData({ only = null } = {}) {
   const seq = ++state.compareSeq;
+  if (!only) state.compareEverRendered = false;
+  const retry = only === null ? null : new Set([].concat(only));
   const items = state.compare.items;
-  const data = only ? state.compareData : new Map();
+  const data = retry ? state.compareData : new Map();
   for (const x of items) {
-    if (only && x.code !== only && data.has(x.code)) continue;
-    data.set(x.code, { status: x.valid ? 'loading' : 'invalid', entry: null, error: null });
+    if (retry && !retry.has(x.code) && data.has(x.code)) continue;
+    const status = x.valid ? (retry ? 'retrying' : 'loading') : 'invalid';
+    data.set(x.code, { status, entry: null, error: null });
   }
   for (const code of [...data.keys()]) if (!items.some((x) => x.code === code)) data.delete(code);
   state.compareData = data;
   state.compareMismatch = false;
   renderCompare();
 
-  await Promise.all(items.filter((x) => x.valid && (!only || x.code === only)).map(async (x) => {
+  await Promise.all(items.filter((x) => x.valid && (!retry || retry.has(x.code))).map(async (x) => {
     const prefix = E.shardPrefix(x.code, state.meta.shards);
     if (!prefix) { data.set(x.code, { status: 'missing', entry: null, error: null }); return; }
     try {
@@ -1174,7 +1181,9 @@ function renderCompare() {
     ? `已略過 ${state.compare.skipped} 個超出上限的代號。` : '';
 
   if (state.compareMismatch) { $('compareBody').innerHTML = ''; return; }
-  const loading = items.some((x) => (state.compareData.get(x.code) || {}).status === 'loading');
+  const anyLoading = items.some((x) => (state.compareData.get(x.code) || {}).status === 'loading');
+  // 首次載入才整頁骨架（不得先畫已到的序列）；重試期間必須保留已成功的結果
+  const loading = anyLoading && !state.compareEverRendered;
   const model = loading ? null : compareModel();
   // 任一 shard 載入中 → 骨架；不得先畫已到的序列再補上（會造成誤讀走勢）
   const chart = loading
@@ -1182,6 +1191,7 @@ function renderCompare() {
     : `${compareControlsHTML()}${compareChartHTML(model)}${compareLegendHTML(model)}`;
   // 選定集合的每一個代號都要被交代，含異常者（§6.1）
   const tables = loading ? '' : `${compareSummaryHTML(model)}${compareTableHTML(model)}<p id="compareRowNote" class="search-status"></p>`;
+  if (!loading) state.compareEverRendered = true;
   $('compareBody').innerHTML = chart + tables + `<ul class="compare-codes">${items.map((x) => {
     const d = state.compareData.get(x.code) || { status: 'loading' };
     const drug = state.byCode?.get(x.code);
@@ -1715,9 +1725,9 @@ function bind() {
       showCompare();
       window.scrollTo(0, 0);
     } else if (action === 'compare-retry') {
-      for (const x of state.compare.items) {
-        if (state.compareData.get(x.code)?.status === 'error') loadCompareData({ only: x.code });
-      }
+      const failed = state.compare.items
+        .filter((x) => state.compareData.get(x.code)?.status === 'error').map((x) => x.code);
+      if (failed.length) loadCompareData({ only: failed });
     } else if (action === 'upcoming-csv') {
       exportUpcomingCSV();
     } else if (action === 'retry-upcoming') {
