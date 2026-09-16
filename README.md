@@ -17,6 +17,9 @@
   - C2 截圖藥師目檢通過；E7 兩項未達目標，MVP 接受現況（2026-09-12）
 - [x] 上線：https://liangrxdev.github.io/NHI-drug-price-history/
 - [x] Phase 3：`TFDA-drug-info-search` 健保代號表新增「健保藥價歷史 → 查看 ↗」欄（2026-09-12，`62de833`，線上端到端驗證通過）
+- [x] Phase 5 多代號比較（`spec-compare.md`）：比較籃／多序列圖表／狀態時間帶／摘要對照表／
+      合併事件表／CSV／失敗矩陣（驗收紀錄：[`.ai-review/compare-acceptance.md`](.ai-review/compare-acceptance.md)；
+      M17 情境 A 未達標待決策、藥師目檢待執行）
 - [x] Phase 4 預告中心（`spec-upcoming.md`）：`data/upcoming.json`、`?view=upcoming` 清單、事件標籤、篩選排序分組、CSV 匯出（驗收紀錄：[`.ai-review/upcoming-acceptance.md`](.ai-review/upcoming-acceptance.md)；藥師目檢待執行）
 
 ## 資料語意（摘要）
@@ -54,6 +57,22 @@ build 日 `D` 當下**尚未生效**（`from > D`）的全部紀錄，一列一�
 5. **「資料產生日」與「最後檢查日」是兩個不同的日期**，相差數週屬正常（見上節）。
 6. **CSV 的欄位型別由試算表軟體自行推斷**，本站無法控制：Excel 直接開啟可能把 `0.00` 顯示為 `0`、把代號當成科學記號。需要原值時請用「資料 → 從文字/CSV」匯入並將該欄指定為文字；檔案本身的位元組內容一律保真（UTF-8 with BOM、RFC 4180）。
 
+## 多代號比較（`?codes=`）
+
+同時檢視 2–4 個健保代號的支付價歷史：多序列走勢圖、每代號一條狀態時間帶、共用 crosshair、
+摘要對照表、合併事件時間表與 CSV 匯出。比較籃存於 sessionStorage，狀態序列化進 URL 可分享。
+
+已知限制：
+
+1. 比較對象**完全由使用者指定**；本站不判斷、不建議任何品項等同性或可替代性，也不做跨品項比價。
+2. 相對變化模式的基準固定為各代號**歷史首筆可唯一判定的有價紀錄**，不隨顯示區間改變；
+   縮小區間只是裁切視窗，看到的仍是「相對於最早有價」的指數。
+3. 絕對金額模式下，價格級距差異大的品項會在視覺上被壓平——這是共用線性軸的必然結果，非資料問題。
+4. 上限 **4 個代號**（4 條線已是色盲安全區分的實務上限）。
+5. **冷開 `?codes=` deep link 仍須等待首頁索引載入完成**（`drug_index.json` 3.28 MB gzip），
+   實測約 7 秒；本期不改啟動依賴，故只記錄不設門檻（見 `.ai-review/compare-acceptance.md`）。
+6. CSV 的欄位型別由試算表軟體自行推斷，同預告中心的說明。
+
 ## 建置
 
 需要 [uv](https://docs.astral.sh/uv/)。
@@ -75,6 +94,8 @@ npm run e2e                                        # DOM／viewport／競態（r
 node scripts/measure_e7.mjs                        # E7 效能量測 + C2 截圖（非 CI）
 node scripts/measure_upcoming.mjs                  # U14 預告中心效能量測（非 CI）
 node scripts/upcoming_review.mjs                   # 預告中心藥師目檢：8766 真實清單、8767 合成反例
+node scripts/measure_compare.mjs                   # M17 多代號比較效能量測（非 CI）
+node scripts/compare_review.mjs                    # 多代號比較藥師目檢：8768 真實四碼、8769 合成重合情境
 node scripts/smoke_live.mjs                        # 部署後線上 smoke check（deep link、搜尋、資料版本、SW）
 uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 JS 用 golden fixture
 ```

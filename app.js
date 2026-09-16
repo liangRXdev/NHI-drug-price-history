@@ -31,6 +31,19 @@ const state = {
   upcoming: { phase: 'idle', snapshot: null, error: null, reason: null, updateFailed: null, refreshing: false },
   upcomingSeq: 0,
   upcomingInflight: 0,
+  // 多代號比較（spec-compare.md §3）：items 依加入順序，slot 為固定序位
+  compare: { items: [], skipped: 0 },
+  compareData: new Map(),
+  compareMismatch: false,
+  compareSeq: 0,
+  compareNotice: null,
+  comparePreset: 'all',
+  compareMode: 'abs',
+  compareHidden: new Set(),        // 可見性只影響主圖與 band，不影響選取集合（§4.2.1）
+  compareTableFilter: new Set(),   // 表格篩選與可見性彼此獨立
+  compareNewestFirst: true,
+  compareEverRendered: false,      // 本次選取集合是否已成功渲染過（決定重試時要不要退回骨架）
+  shardInflight: new Map(),
 };
 
 // 逾時（毫秒）：請求卡住時必須在有限時間內轉為錯誤狀態，不可無限顯示「載入中」（codex R7）。
@@ -162,6 +175,7 @@ function renderCoreState() {
 function renderBanners() {
   const out = [];
   if (state.core === 'error' || state.core === 'mismatch') out.push(coreMessageHTML());
+  if (state.compareNotice) out.push(`<div class="alert alert--info">${esc(state.compareNotice)}</div>`);
   const st = stale();
   if (st.level === 'yellow' || st.level === 'red') {
     const cls = st.level === 'red' ? 'alert--error' : 'alert--warn';
@@ -224,13 +238,13 @@ function renderCard(d) {
   else if (c.kind === 'exhausted' || c.kind === 'conflict') price = `<span class="tag warn">${esc(c.text)}</span>`;
   else price = `<span class="tag info">${esc(c.text)}</span>`;
   const sub = [d.ingredient, strengthText(d), d.dosageForm].filter(Boolean).map(esc).join('・');
-  return `<a class="result" href="?code=${encodeURIComponent(d.code)}" data-code="${esc(d.code)}">
+  return `<div class="result-wrap"><a class="result" href="?code=${encodeURIComponent(d.code)}" data-code="${esc(d.code)}">
     <div class="r-top"><span class="r-name">${dash(d.chName)}</span><span class="r-code mono">${esc(d.code)}</span></div>
     <div class="r-en">${dash(d.enName)}</div>
     ${sub ? `<div class="r-sub">${sub}</div>` : ''}
     <div class="r-price">${price}${upcomingTag(c.upcoming)}</div>
     <div class="r-meta">最近異動 <span class="mono">${dash(d.lastPriceChangeDate)}</span>・歷史 ${d.historyCount} 筆・調價 ${d.priceChangeCount} 次 ${flagTags(d.flags)}</div>
-  </a>`;
+  </a><span class="r-cmp" data-cmp-slot="${esc(d.code)}">${compareButtonHTML(d.code)}</span></div>`;
 }
 
 function runSearch() {
@@ -284,16 +298,24 @@ function route() {
   const params = new URLSearchParams(location.search);
   const code = params.get('code');
   if (params.get('view') === 'upcoming') showUpcoming();
+  else if (params.get('codes') !== null) {
+    // 情境 C（冷開 deep link）：導覽開始即為起點，只記錄不設門檻
+    if (!performance.getEntriesByName('compare-open-start').length) performance.mark('compare-open-start');
+    showCompare();
+  }
   else if (code !== null) showDetail(code.trim().toUpperCase());
   else showSearch();
 }
 
 function showSearch() {
+  state.compareNotice = null;
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
   state.upcomingSeq++;                 // 同時使在途的預告請求失效，其回應一律丟棄
+  state.compareSeq++;
   state.current = null;
   $('detailView').hidden = true;
   $('upcomingView').hidden = true;
+  $('compareView').hidden = true;
   $('searchView').hidden = false;
   $('detail').innerHTML = '';
   document.title = APP_TITLE;
@@ -309,9 +331,11 @@ function navigate(code) {
 async function showDetail(code) {
   const seq = ++state.detailSeq;
   state.upcomingSeq++;                 // 同上：離開預告頁即丟棄其在途回應
+  state.compareSeq++;
   state.current = null;
   $('searchView').hidden = true;
   $('upcomingView').hidden = true;
+  $('compareView').hidden = true;
   $('detailView').hidden = false;
   const box = $('detail');
 
@@ -398,6 +422,7 @@ function renderDetail() {
     ${meta ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${dash(v)}</dd>`).join('')}</dl>`
     : '<p class="hint">尚無已生效紀錄，描述欄位待生效後顯示。</p>'}
     <p class="hint" style="margin:0.6rem 0 0">品名、成分等描述欄位為來源以現況回填之資料，非各期間當時的名稱。</p>
+    <span class="detail-cmp" data-cmp-slot="${esc(code)}" data-cmp-label="＋加入比較">${compareButtonHTML(code, '＋加入比較')}</span>
     ${tfda || rule || hasUpcoming ? `<div class="links">
       ${tfda ? `<a href="${esc(tfda)}" target="_blank" rel="noopener">TFDA 許可證資料 ↗</a>` : ''}
       ${rule ? `<a href="${esc(rule)}" target="_blank" rel="noopener">健保給付規定（PDF）↗</a>` : ''}
@@ -482,6 +507,20 @@ function summaryMetrics(s, recs, entry, st) {
 
 // ── 圖表（手刻 SVG；區段模型見 engine.chartModel）─────────────────
 // viewBox 寬度＝實際容器寬度，文字才會維持 11px（固定 800 寬在手機上會縮到約 5px）
+// 狀態區塊的紋理：單品項圖與比較圖共用同一組定義（以紋理而非只靠顏色區分）
+const CHART_DEFS = `<defs>
+    <pattern id="hatchTerm" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="8" height="8" fill="#FDF3F2"/><line x1="0" y1="0" x2="0" y2="8" style="stroke:var(--c-term)" stroke-width="2"/></pattern>
+    <pattern id="dotsSusp" width="7" height="7" patternUnits="userSpaceOnUse">
+      <rect width="7" height="7" fill="#F1F1F1"/><circle cx="3.5" cy="3.5" r="1.3" style="fill:var(--c-susp)"/></pattern>
+    <pattern id="crossUnknown" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#FFF8EC"/><path d="M0 0L8 8M8 0L0 8" style="stroke:var(--c-unknown)" stroke-width="1"/></pattern>
+    <pattern id="lineZero" width="10" height="6" patternUnits="userSpaceOnUse">
+      <rect width="10" height="6" fill="#F4F1EB"/><line x1="0" y1="3" x2="10" y2="3" style="stroke:var(--c-susp)" stroke-width="0.8"/></pattern>
+    <pattern id="hatchGap" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+      <rect width="6" height="6" fill="#EFEAE1"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--c-gap)" stroke-width="1.5"/></pattern>
+  </defs>`;
+
 const M = { l: 58, r: 14, t: 16, b: 30 };
 let chartWidth = 800;
 
@@ -507,16 +546,7 @@ function renderChart(recs, T) {
   const tip = (r) => `${r.from} ～ ${r.to ?? '無迄日'}：${E.stateLabel(r, priors.get(r), 'cell')}${r.from > T ? '（預告）' : ''}`;
   const parts = [];
 
-  parts.push(`<defs>
-    <pattern id="hatchTerm" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <rect width="8" height="8" fill="#FDF3F2"/><line x1="0" y1="0" x2="0" y2="8" style="stroke:var(--c-term)" stroke-width="2"/></pattern>
-    <pattern id="dotsSusp" width="7" height="7" patternUnits="userSpaceOnUse">
-      <rect width="7" height="7" fill="#F1F1F1"/><circle cx="3.5" cy="3.5" r="1.3" style="fill:var(--c-susp)"/></pattern>
-    <pattern id="crossUnknown" width="8" height="8" patternUnits="userSpaceOnUse">
-      <rect width="8" height="8" fill="#FFF8EC"/><path d="M0 0L8 8M8 0L0 8" style="stroke:var(--c-unknown)" stroke-width="1"/></pattern>
-    <pattern id="lineZero" width="10" height="6" patternUnits="userSpaceOnUse">
-      <rect width="10" height="6" fill="#F4F1EB"/><line x1="0" y1="3" x2="10" y2="3" style="stroke:var(--c-susp)" stroke-width="0.8"/></pattern>
-  </defs>`);
+  parts.push(CHART_DEFS);
 
   // 區塊：終止／此前無有價的 0 元／暫停／異常／空窗
   for (const b of m.bands) {
@@ -610,20 +640,9 @@ function legend(m) {
 }
 
 // ── 歷史表（spec §8.3、E3）──────────────────────────────────────
-const EVENT_TEXT = {
-  initial: '最早紀錄', first_priced: '首次有價', increase: '調升', decrease: '調降',
-  unchanged: '同價續期', terminated: '終止支付', suspended: '暫停支付',
-  relisted: '恢復支付（跨越停止期間）', unknown: '變動無法判定',
-};
-const INVALID_TEXT = { blank_start: '起日空白', invalid_date: '日期無法解析', inverted_interval: '起日晚於迄日' };
+// 事件與異常文案已移入 engine.js：比較頁的 CSV 也要用同一份，否則畫面與匯出會漂移
+const { EVENT_TEXT, INVALID_TEXT, eventText } = E;
 const CHANGE_TYPES = new Set(['increase', 'decrease', 'relisted']);
-
-function eventText(r, prior) {
-  if (r.eventType === 'unchanged' && r.priceState !== 'priced') return '同狀態續期';
-  // 此前從未有價的 0 元：事件欄不得稱「終止」（§5.3，codex R3）
-  if (r.eventType === 'terminated' && E.isUnpricedZero(r, prior)) return '0 元（此前無有價紀錄）';
-  return EVENT_TEXT[r.eventType] || r.eventType;
-}
 
 function renderTable(entry, T) {
   const priors = E.priorPrices(entry.records);
@@ -942,11 +961,716 @@ function showUpcoming() {
   state.today = E.localISODate();      // 每次進入取一次 T，該次檢視內不跨午夜更新（§2）
   $('searchView').hidden = true;
   $('detailView').hidden = true;
+  $('compareView').hidden = true;
   $('detail').innerHTML = '';
   $('upcomingView').hidden = false;
   document.title = `預告中心 — ${APP_TITLE}`;
   renderUpcoming();
   loadUpcoming({ force: true });       // 每次進入都重取：清單很小，且使 §5.5 的「更新失敗」可達
+}
+
+// ── 比較籃（spec-compare.md §3）──────────────────────────────────
+// 序位（1–4）決定顏色與線型，移除後**不重新洗牌**：使用者會記線，洗牌等於換掉他的參照。
+// 狀態存 sessionStorage——比較是一次性任務，不是長期偏好（與搜尋頁的 localStorage 不同）。
+const COMPARE_KEY = 'compareCodes';
+
+function readCompareSession() {
+  try {
+    const raw = sessionStorage.getItem(COMPARE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((x) => x && typeof x.code === 'string' && Number.isInteger(x.slot))
+      .slice(0, E.COMPARE_MAX);
+  } catch {
+    return [];                                   // 無 storage 或內容損毀：本次視為空籃
+  }
+}
+
+function writeCompareSession(items) {
+  try {
+    sessionStorage.setItem(COMPARE_KEY, JSON.stringify(items.map(({ code, slot, valid }) => ({ code, slot, valid }))));
+  } catch { /* 私密模式等：僅本次有效 */ }
+}
+
+/** 最小的未使用序位；空出的序位在下次加入時才重新使用。 */
+function nextSlot(items) {
+  const used = new Set(items.map((x) => x.slot));
+  for (let i = 0; i < E.COMPARE_MAX; i += 1) if (!used.has(i)) return i;
+  return null;
+}
+
+function setCompare(items, { syncUrl = true } = {}) {
+  state.compare.items = items;
+  writeCompareSession(items);
+  if (syncUrl && new URLSearchParams(location.search).get('codes') !== null) {
+    const p = new URLSearchParams(location.search);
+    p.set('codes', E.serializeCompareCodes(items));
+    history.replaceState(history.state, '', `?${p}`);
+  }
+  renderTray();
+  renderCompareEntries();
+}
+
+function compareHas(code) {
+  return state.compare.items.some((x) => x.code === code);
+}
+
+function addCompare(code) {
+  if (compareHas(code) || state.compare.items.length >= E.COMPARE_MAX) return;
+  const slot = nextSlot(state.compare.items);
+  setCompare([...state.compare.items, { code, slot, valid: E.isValidCode(code) }]);
+}
+
+function removeCompare(code) {
+  setCompare(state.compare.items.filter((x) => x.code !== code));
+  if (!$('compareView').hidden) showCompare();       // 比較視圖內移除：依 §3.3 重新決定去向
+}
+
+/** URL 一律優先於 sessionStorage：分享出去的連結不得混入對方自己的籃子。 */
+function restoreCompare() {
+  const parsed = E.parseCompareCodes(location.search);
+  if (new URLSearchParams(location.search).get('codes') !== null) {
+    state.compare.items = parsed.items.map((x, i) => ({ ...x, slot: i }));
+    state.compare.skipped = parsed.skipped;
+    writeCompareSession(state.compare.items);
+  } else {
+    state.compare.items = readCompareSession();
+    state.compare.skipped = 0;
+  }
+  renderTray();
+}
+
+function trayChipHTML(x) {
+  const d = state.byCode?.get(x.code);
+  const name = d ? d.chName : '';
+  return `<span class="tray-chip" data-slot="${x.slot + 1}">
+    <span class="tray-dot" aria-hidden="true"></span>
+    <span class="mono">${esc(x.code)}</span>${name ? `<span class="tray-name">${esc(name)}</span>` : ''}
+    <button type="button" data-action="tray-remove" data-code="${esc(x.code)}"
+            aria-label="移除 ${esc(x.code)}">×</button>
+  </span>`;
+}
+
+function renderTray() {
+  const tray = $('compareTray');
+  const items = state.compare.items;
+  tray.hidden = items.length === 0;
+  if (!items.length) { tray.innerHTML = ''; return; }
+  const ready = items.length >= 2;
+  tray.innerHTML = `<div class="tray-inner">
+    <span class="tray-label">比較籃 ${items.length}/${E.COMPARE_MAX}</span>
+    <div class="tray-chips">${items.map(trayChipHTML).join('')}</div>
+    <div class="tray-actions">
+      ${ready ? '<button type="button" data-action="tray-start">開始比較</button>'
+    : '<span class="hint">再加入 1 個品項即可比較</span>'}
+      <button type="button" class="link-btn" data-action="tray-clear">清空</button>
+    </div>
+  </div>`;
+}
+
+/** 搜尋卡與詳細頁的「＋比較」按鈕狀態（已加入／已滿）。 */
+function compareButtonHTML(code, label = '＋比較') {
+  if (compareHas(code)) return `<button type="button" class="add-cmp" disabled>已加入</button>`;
+  const full = state.compare.items.length >= E.COMPARE_MAX;
+  return `<button type="button" class="add-cmp" data-action="add-compare" data-code="${esc(code)}"
+    ${full ? 'disabled title="最多 4 個，請先移除"' : ''}>${label}</button>`;
+}
+
+/** 加入／移除後就地更新既有的按鈕，不整頁重繪。 */
+function renderCompareEntries() {
+  for (const btn of document.querySelectorAll('[data-cmp-slot]')) {
+    const code = btn.dataset.cmpSlot;
+    btn.innerHTML = compareButtonHTML(code, btn.dataset.cmpLabel || '＋比較');
+  }
+}
+
+// ── 比較視圖：資料載入與狀態（spec-compare.md §2、§6）────────────
+// 取得狀態（§4.3 第一層）：invalid｜loading｜missing｜error｜ok。
+// 「載入失敗」與「查無此代號」必須分開——把失敗說成查無，使用者會以為比較是完整的。
+const COMPARE_STATUS_TEXT = {
+  invalid: '代號格式不正確',
+  loading: '載入中',
+  retrying: '重試中',
+  missing: '查無此代號',
+  error: '資料載入失敗',
+  ok: '',
+};
+
+/** 同片只 fetch 一次；**進行中**的請求也共享，不得因第二個代號而發第二個請求。 */
+function loadShard(prefix) {
+  const cached = state.shardCache.get(prefix);
+  if (cached) return Promise.resolve(cached);
+  let inflight = state.shardInflight.get(prefix);
+  if (!inflight) {
+    inflight = fetchJSON(`data/history/${encodeURIComponent(prefix)}.json`, TIMEOUT.shard)
+      .then((shard) => {
+        state.shardCache.set(prefix, shard);      // 失敗不進快取，必須可重試
+        return shard;
+      })
+      .finally(() => state.shardInflight.delete(prefix));
+    state.shardInflight.set(prefix, inflight);
+  }
+  return inflight;
+}
+
+/** `only`：只重載這些代號（重試）；null 代表整批重載。重試一律一次處理完所有失敗代號，
+ *  否則同片的兩個代號會各觸發一次 loadCompareData，產生沒必要的第二個請求。 */
+async function loadCompareData({ only = null } = {}) {
+  const seq = ++state.compareSeq;
+  if (!only) state.compareEverRendered = false;
+  const retry = only === null ? null : new Set([].concat(only));
+  const items = state.compare.items;
+  const data = retry ? state.compareData : new Map();
+  for (const x of items) {
+    if (retry && !retry.has(x.code) && data.has(x.code)) continue;
+    const status = x.valid ? (retry ? 'retrying' : 'loading') : 'invalid';
+    data.set(x.code, { status, entry: null, error: null });
+  }
+  for (const code of [...data.keys()]) if (!items.some((x) => x.code === code)) data.delete(code);
+  state.compareData = data;
+  state.compareMismatch = false;
+  renderCompare();
+
+  await Promise.all(items.filter((x) => x.valid && (!retry || retry.has(x.code))).map(async (x) => {
+    const prefix = E.shardPrefix(x.code, state.meta.shards);
+    if (!prefix) { data.set(x.code, { status: 'missing', entry: null, error: null }); return; }
+    try {
+      const shard = await loadShard(prefix);
+      const v = E.validateShard(shard, state.meta, prefix, x.code);
+      if (v.reason === 'version_mismatch') {
+        // 混批一律整頁不組合（非部分降級）：快取命中時也要比對版本
+        state.shardCache.delete(prefix);
+        state.compareMismatch = true;
+        data.set(x.code, { status: 'error', entry: null, error: '資料版本不一致' });
+      } else if (v.reason === 'missing_code') {
+        data.set(x.code, { status: 'missing', entry: null, error: null });
+      } else if (!v.ok) {
+        data.set(x.code, { status: 'error', entry: null, error: '分片內容不合法' });
+      } else {
+        data.set(x.code, { status: 'ok', entry: shard.drugs[x.code], error: null });
+      }
+    } catch (e) {
+      data.set(x.code, { status: 'error', entry: null, error: e.message });
+    }
+  }));
+  if (seq !== state.compareSeq) return;           // 使用者已改選：丟棄本回應
+  renderCompare();
+}
+
+/** §6.1「完整成功」＝所有選定代號皆已取得有效且版本一致的資料。 */
+function compareComplete() {
+  const items = state.compare.items;
+  return items.length >= 2 && !state.compareMismatch
+    && items.every((x) => state.compareData.get(x.code)?.status === 'ok');
+}
+
+function compareBannerHTML() {
+  if (state.compareMismatch) {
+    return '<div class="alert alert--error">資料已更新，請重新整理頁面。'
+      + '<button type="button" data-action="reload">重新整理</button></div>';
+  }
+  const failed = state.compare.items.filter((x) => state.compareData.get(x.code)?.status === 'error');
+  if (!failed.length) return '';
+  return `<div class="alert alert--error">以下品項的資料載入失敗：
+    <span class="mono">${failed.map((x) => esc(x.code)).join('、')}</span>
+    <button type="button" data-action="compare-retry">重試</button></div>`;
+}
+
+/**
+ * M17 的終點是「可互動」＝圖表已渲染且 crosshair 可回應，不是 JS 工作完成。
+ * 因此在寫入 DOM 後強制 layout（讀 offsetHeight）才收秒表；crosshair 的實際可回應性
+ * 由量測腳本另行驗證（派送 mousemove 檢查 tooltip）。
+ */
+function renderCompare() {
+  if ($('compareView').hidden) return;
+  const items = state.compare.items;
+  $('compareBanner').innerHTML = compareBannerHTML();
+  $('compareSkipped').textContent = state.compare.skipped
+    ? `已略過 ${state.compare.skipped} 個超出上限的代號。` : '';
+
+  if (state.compareMismatch) { $('compareBody').innerHTML = ''; return; }
+  const anyLoading = items.some((x) => (state.compareData.get(x.code) || {}).status === 'loading');
+  // 首次載入才整頁骨架（不得先畫已到的序列）；重試期間必須保留已成功的結果
+  const loading = anyLoading && !state.compareEverRendered;
+  const model = loading ? null : compareModel();
+  // 任一 shard 載入中 → 骨架；不得先畫已到的序列再補上（會造成誤讀走勢）
+  const chart = loading
+    ? '<div class="skeleton cmp-skeleton" aria-hidden="true"></div><p class="search-status">圖表載入中…</p>'
+    : `${compareControlsHTML()}${compareChartHTML(model)}${compareLegendHTML(model)}`;
+  // 選定集合的每一個代號都要被交代，含異常者（§6.1）
+  const tables = loading ? '' : `${compareSummaryHTML(model)}${compareTableHTML(model)}<p id="compareRowNote" class="search-status"></p>`;
+  if (!loading) state.compareEverRendered = true;
+  const t0 = performance.now();
+  $('compareBody').innerHTML = chart + tables + `<ul class="compare-codes">${items.map((x) => {
+    const d = state.compareData.get(x.code) || { status: 'loading' };
+    const drug = state.byCode?.get(x.code);
+    const name = d.status === 'ok' ? (E.selectMeta(d.entry, state.today)?.chName ?? drug?.chName ?? '') : '';
+    return `<li class="compare-code" data-code="${esc(x.code)}" data-slot="${x.slot + 1}" data-status="${d.status}">
+      <span class="tray-dot" aria-hidden="true"></span>
+      <span class="mono">${esc(x.code)}</span>
+      <span class="compare-name">${esc(name)}</span>
+      <span class="compare-state">${esc(COMPARE_STATUS_TEXT[d.status])}</span>
+      <button type="button" class="link-btn" data-action="tray-remove" data-code="${esc(x.code)}">移除</button>
+    </li>`;
+  }).join('')}</ul>`;
+
+  if (!loading) {
+    void $('compareBody').offsetHeight;                       // 強制 layout：此刻圖表才真的可互動
+    performance.measure('compare-render', { start: t0 });
+    if (performance.getEntriesByName('compare-open-start').length) {
+      performance.measure('compare-open-to-interactive', 'compare-open-start');
+      performance.clearMarks('compare-open-start');
+    }
+  }
+}
+
+function showCompare() {
+  state.detailSeq++;
+  state.upcomingSeq++;
+  state.current = null;
+  restoreCompare();
+  const items = state.compare.items;
+
+  // §3.3：清單長度（含異常項目）決定去向，不以「有效碼數」判定
+  if (items.length === 1 && items[0].valid) {
+    const code = items[0].code;
+    setCompare([], { syncUrl: false });
+    history.replaceState(history.state, '', `?code=${encodeURIComponent(code)}`);
+    state.compareNotice = '比較需要 2 個以上品項，已為你開啟單品項頁。';
+    showDetail(code);
+    renderBanners();
+    return;
+  }
+  $('searchView').hidden = true;
+  $('detailView').hidden = true;
+  $('upcomingView').hidden = true;
+  $('compareView').hidden = false;
+  document.title = `多代號比較 — ${APP_TITLE}`;
+  state.today = E.localISODate();          // 一次比較共用同一個 T，進入時取得一次（§4.4）
+
+  if (items.length === 0) {
+    $('compareBanner').innerHTML = '';
+    $('compareSkipped').textContent = '';
+    $('compareBody').innerHTML = '<div class="card"><p>代號皆無資料。請回<a href="./" data-action="to-search">搜尋頁</a>重新選擇品項。</p></div>';
+    history.replaceState(history.state, '', location.pathname);
+    return;
+  }
+  if (state.core !== 'ready') {
+    $('compareBody').innerHTML = coreMessageHTML();
+    return;
+  }
+  loadCompareData();
+}
+
+// ── 比較圖表（spec-compare.md §4）────────────────────────────────
+// 主區只畫有價線段，非有價一律中斷；狀態改由下方每代號一條 band 呈現——
+// 4 個代號同時畫區塊會互相覆蓋（§4.3）。
+const CM = { l: 56, r: 14, t: 18, b: 26 };
+const BAND_H = 14;
+const BAND_GAP = 3;
+const MARKER_TYPES = new Set(['increase', 'decrease', 'relisted']);
+
+/** 依目前選取、可見性與 preset 組出繪圖模型。純讀 state，不改 DOM。 */
+function compareModel() {
+  const T = state.today;
+  const items = state.compare.items;
+  const series = items.map((x) => {
+    const d = state.compareData.get(x.code) || { status: 'loading' };
+    const records = d.status === 'ok' ? d.entry.records : [];
+    return {
+      code: x.code,
+      slot: x.slot,
+      status: d.status,
+      entry: d.entry || null,
+      records,
+      visible: !state.compareHidden.has(x.code),
+      baseline: records.length ? E.relativeBaseline(records) : { kind: 'none', record: null },
+    };
+  });
+  const range = E.compareRange(series.filter((s) => s.records.length), T, state.comparePreset);
+  if (!range) return { range: null, series, T };
+
+  for (const s of series) {
+    s.segments = s.records.length ? E.compareSegments(s.records, range.from, range.to, T) : [];
+    s.bands = s.records.length ? E.statusBands(s.records, range.from, range.to, T) : [];
+    s.markers = s.segments.filter((g) => MARKER_TYPES.has(g.record.eventType) && !g.clippedLeft);
+  }
+
+  // Y 軸取值集合：只看**可見**序列的可繪製點（已隱藏者不納入）
+  const values = [];
+  for (const s of series) {
+    if (!s.visible) continue;
+    for (const g of s.segments) {
+      if (state.compareMode === 'rel') {
+        if (s.baseline.kind !== 'ok') continue;
+        const v = E.relativeIndex(g.rawPrice, s.baseline.rawPrice);
+        if (v !== null) values.push(Number(v));
+      } else values.push(g.price);
+    }
+  }
+  let yMin = 0;
+  let yMax = 1;
+  if (values.length) {
+    const lo = Math.min(...values);
+    const hi = Math.max(...values);
+    const span = hi - lo || hi * 0.2 || 1;
+    yMin = Math.max(0, lo - span * 0.15);
+    yMax = hi + span * 0.15;
+  }
+  return { range, series, T, yMin, yMax, hasValues: values.length > 0 };
+}
+
+const seriesValue = (s, seg) => (state.compareMode === 'rel'
+  ? (s.baseline.kind === 'ok' ? Number(E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)) : null)
+  : seg.price);
+
+function compareChartHTML(m) {
+  if (!m.range) return '<p class="hint">無可繪製的區間。</p>';
+  const W = chartWidth;
+  const bandsH = (BAND_H + BAND_GAP) * m.series.length;
+  const H = (W < 520 ? 240 : 300) + bandsH;
+  const iw = W - CM.l - CM.r;
+  const plotH = H - CM.t - CM.b - bandsH - 10;
+  const x0n = E.dayNumber(m.range.from);
+  const x1n = E.dayNumber(m.range.to);
+  const pad = Math.max(10, Math.round((x1n - x0n) * 0.02));
+  const xMin = x0n;
+  const xMax = x1n + pad;
+  const x = (d) => CM.l + ((d - xMin) / (xMax - xMin)) * iw;
+  const y = (v) => CM.t + (1 - (v - m.yMin) / (m.yMax - m.yMin)) * plotH;
+  const f = (n) => n.toFixed(1);
+  const parts = [];
+
+  // 格線與 Y 軸
+  if (m.hasValues) {
+    for (const v of E.niceTicks(m.yMin, m.yMax, 5)) {
+      parts.push(`<g class="grid"><line x1="${CM.l}" x2="${W - CM.r}" y1="${f(y(v))}" y2="${f(y(v))}"/></g>
+        <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(state.compareMode === 'rel' ? v.toFixed(0) : E.fmtMoney(v))}</text>`);
+    }
+    // 相對模式的 Y 軸不得標成「價格」或任何貨幣單位（§4.1）
+    parts.push(`<text class="y-unit" x="${CM.l - 6}" y="${CM.t - 5}" text-anchor="end">${state.compareMode === 'rel' ? '指數（各自基準＝100）' : '元'}</text>`);
+  }
+
+  // X 軸年份
+  const yr0 = +m.range.from.slice(0, 4);
+  const yr1 = +E.fromDayNumber(xMax).slice(0, 4);
+  const maxTicks = Math.max(3, Math.floor(iw / 70));
+  const step = [1, 2, 5, 10, 20].find((s) => (yr1 - yr0) / s <= maxTicks) || 20;
+  const axisY = CM.t + plotH;
+  for (let yr = Math.ceil(yr0 / step) * step; yr <= yr1; yr += step) {
+    const xv = x(E.dayNumber(`${yr}-01-01`));
+    if (xv < CM.l || xv > W - CM.r) continue;
+    parts.push(`<g class="axis"><line x1="${f(xv)}" x2="${f(xv)}" y1="${axisY}" y2="${axisY + 4}"/></g>
+      <text x="${f(xv)}" y="${axisY + 16}" text-anchor="middle">${yr}</text>`);
+  }
+  parts.push(`<g class="axis"><line x1="${CM.l}" x2="${W - CM.r}" y1="${axisY}" y2="${axisY}"/></g>`);
+
+  const todayN = E.dayNumber(m.T);
+  if (todayN >= xMin && todayN <= xMax) {
+    parts.push(`<g class="today"><line x1="${f(x(todayN))}" x2="${f(x(todayN))}" y1="${CM.t}" y2="${axisY}"/></g>
+      <text x="${f(x(todayN))}" y="${CM.t - 5}" text-anchor="middle">今日</text>`);
+  }
+
+  // 有價線段（stepped，不內插；非有價一律中斷）
+  for (const s of m.series) {
+    if (!s.visible) continue;
+    let prev = null;
+    for (const seg of s.segments) {
+      const v = seriesValue(s, seg);
+      if (v === null) continue;
+      const gx0 = x(E.dayNumber(seg.from));
+      const gx1 = x(Math.min(E.dayNumber(seg.to) + 1, xMax));
+      const gy = y(v);
+      const cls = `cmp-line s${s.slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
+      const val = state.compareMode === 'rel'
+        ? ` data-index="${E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)}"`
+        : ` data-price="${seg.rawPrice}"`;
+      // 相鄰且價格不同才連垂直線；空窗與非有價區間之後 prev 已清空
+      if (prev && prev.nextX === gx0 && prev.y !== gy) {
+        parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx0)}" y1="${f(prev.y)}" y2="${f(gy)}"/>`);
+      }
+      parts.push(`<line class="${cls}" data-code="${esc(s.code)}"${val} x1="${f(gx0)}" x2="${f(gx1)}" y1="${f(gy)}" y2="${f(gy)}"/>`);
+      prev = { nextX: gx1, y: gy, contiguous: seg.record.to !== null };
+      if (MARKER_TYPES.has(seg.record.eventType) && !seg.clippedLeft) {
+        parts.push(markerPath(s.slot, gx0, gy, seg, s.code, s.records.indexOf(seg.record)));
+      }
+    }
+  }
+
+  // 狀態時間帶：每代號一條，沿同一 X 軸
+  m.series.forEach((s, i) => {
+    const by = axisY + 24 + i * (BAND_H + BAND_GAP);
+    parts.push(`<text class="band-label" x="${CM.l - 6}" y="${by + 11}" text-anchor="end">${esc(s.code.slice(0, 4))}…</text>`);
+    if (s.status !== 'ok') {
+      parts.push(`<rect class="cmp-band band-${s.status}" x="${CM.l}" y="${by}" width="${iw}" height="${BAND_H}">
+        <title>${esc(`${s.code}：${COMPARE_STATUS_TEXT[s.status]}`)}</title></rect>`);
+      return;
+    }
+    for (const b of s.bands) {
+      const bx0 = x(E.dayNumber(b.from));
+      const bx1 = x(Math.min(E.dayNumber(b.to) + 1, xMax));
+      parts.push(`<rect class="cmp-band band-k-${b.kind}${b.upcoming ? ' band-upcoming' : ''}${s.visible ? '' : ' band-hidden'}"
+        data-kind="${b.kind}" x="${f(bx0)}" y="${by}" width="${f(Math.max(1, bx1 - bx0))}" height="${BAND_H}">
+        <title>${esc(`${s.code} ${b.from} ～ ${b.to}：${b.tooltip}`)}</title></rect>`);
+    }
+  });
+
+  return `<div class="chart-wrap cmp-chart-wrap">
+    <svg class="chart cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="cmpTitle cmpDesc"
+      data-x-min="${m.range.from}" data-x-max="${E.fromDayNumber(xMax)}" data-plot-left="${CM.l}" data-plot-right="${W - CM.r}">
+      ${CHART_DEFS}
+      <title id="cmpTitle">多代號健保支付價走勢比較</title>
+      <desc id="cmpDesc">${esc(`${m.series.length} 個代號，${state.compareMode === 'rel' ? '相對變化指數' : '絕對金額'}模式；逐筆數值見下方表格。`)}</desc>
+      ${parts.join('')}
+      <line class="cmp-cross" x1="0" x2="0" y1="${CM.t}" y2="${axisY}" hidden/>
+      <rect class="cmp-hit" x="${CM.l}" y="${CM.t}" width="${iw}" height="${axisY - CM.t}" fill="transparent"/>
+    </svg>
+    <div id="compareCross" class="cross-tip" hidden></div>
+  </div>`;
+}
+
+function markerPath(slot, cx, cy, seg, code, index) {
+  const shape = ['circle', 'square', 'triangle', 'diamond'][slot];
+  const cls = `cmp-marker s${slot + 1}${seg.upcoming ? ' upcoming' : ''}" data-code="${esc(code)}" data-index="${index}`;
+  const t = `<title>${esc(`${code} ${seg.record.from} ${seg.rawPrice} 元`)}</title>`;
+  if (shape === 'circle') return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4">${t}</circle>`;
+  if (shape === 'square') return `<rect class="${cls}" x="${(cx - 3.5).toFixed(1)}" y="${(cy - 3.5).toFixed(1)}" width="7" height="7">${t}</rect>`;
+  if (shape === 'triangle') {
+    return `<path class="${cls}" d="M${cx.toFixed(1)} ${(cy - 4.5).toFixed(1)}L${(cx + 4).toFixed(1)} ${(cy + 3.5).toFixed(1)}L${(cx - 4).toFixed(1)} ${(cy + 3.5).toFixed(1)}Z">${t}</path>`;
+  }
+  return `<path class="${cls}" d="M${cx.toFixed(1)} ${(cy - 5).toFixed(1)}L${(cx + 4).toFixed(1)} ${cy.toFixed(1)}L${cx.toFixed(1)} ${(cy + 5).toFixed(1)}L${(cx - 4).toFixed(1)} ${cy.toFixed(1)}Z">${t}</path>`;
+}
+
+/** §4.1.1：圖例必須分辨三種無線狀態，文案不得合併。 */
+function baselineText(s) {
+  if (state.compareMode !== 'rel') return '';
+  if (s.status !== 'ok') return '';
+  if (s.baseline.kind === 'none') return '無有價紀錄';
+  if (s.baseline.kind === 'undeterminable') return '有有價紀錄，但基準無法判定';
+  const inWindow = s.segments && s.segments.length > 0;
+  return inWindow
+    ? `基準 ${s.baseline.date}／${s.baseline.rawPrice} 元`
+    : `此區間無有價紀錄（基準 ${s.baseline.date}／${s.baseline.rawPrice} 元）`;
+}
+
+function compareLegendHTML(m) {
+  return `<ul class="cmp-legend">${m.series.map((s) => {
+    const meta = s.status === 'ok' ? E.selectMeta(s.entry, m.T) : null;
+    const summary = s.status === 'ok' ? E.summaryAt(s.records, m.T) : null;
+    const now = summary ? E.currentLabel({ ...summary, pricedBefore: summary.current ? E.pricedBefore(s.records, summary.current) : null }) : COMPARE_STATUS_TEXT[s.status];
+    return `<li class="cmp-legend-item" data-slot="${s.slot + 1}" data-code="${esc(s.code)}" data-visible="${s.visible}">
+      <button type="button" data-action="cmp-toggle" data-code="${esc(s.code)}"
+              aria-pressed="${s.visible}" title="${s.visible ? '點擊隱藏此序列' : '點擊顯示此序列'}">
+        <span class="cmp-swatch" aria-hidden="true"></span>
+        <span class="mono">${esc(s.code)}</span>
+        <span class="cmp-legend-name">${esc(meta?.chName ?? '')}</span>
+        <span class="cmp-legend-state">${esc(now)}</span>
+        ${baselineText(s) ? `<span class="cmp-legend-base">${esc(baselineText(s))}</span>` : ''}
+        ${s.visible ? '' : '<span class="cmp-legend-state">（已隱藏）</span>'}
+      </button>
+    </li>`;
+  }).join('')}</ul>`;
+}
+
+function compareControlsHTML() {
+  const presets = [['all', '全部'], ['y10', '近 10 年'], ['y5', '近 5 年'], ['y3', '近 3 年']];
+  const modes = [['abs', '絕對金額'], ['rel', '相對變化']];
+  return `<div class="cmp-controls">
+    <div class="cmp-group" role="group" aria-label="顯示區間">
+      ${presets.map(([v, t]) => `<button type="button" data-action="cmp-preset" data-preset="${v}"
+        aria-pressed="${state.comparePreset === v}">${t}</button>`).join('')}
+    </div>
+    <div class="cmp-group" role="group" aria-label="Y 軸模式">
+      ${modes.map(([v, t]) => `<button type="button" data-action="cmp-mode" data-mode="${v}"
+        aria-pressed="${state.compareMode === v}">${t}</button>`).join('')}
+    </div>
+    ${state.compareMode === 'rel' ? '<span class="hint">相對於各自基準＝100；不同品項之間不可比價。</span>' : ''}
+  </div>`;
+}
+
+/** crosshair：單一 tooltip 列出**所有**選定代號，含已隱藏者（隱藏是視覺操作，不是移除）。 */
+function crosshairRowsHTML(day) {
+  const items = state.compare.items;
+  return `<div class="cross-day mono">${esc(day)}</div>${items.map((x) => {
+    const d = state.compareData.get(x.code) || { status: 'loading' };
+    const hidden = state.compareHidden.has(x.code);
+    const text = d.status === 'ok'
+      ? E.dayState(d.entry.records, day).tooltip
+      : COMPARE_STATUS_TEXT[d.status];
+    return `<div class="cross-row" data-slot="${x.slot + 1}" data-code="${esc(x.code)}">
+      <span class="cmp-swatch" aria-hidden="true"></span>
+      <span class="mono">${esc(x.code)}</span>
+      <span>${esc(text)}${hidden ? '（已隱藏）' : ''}</span>
+    </div>`;
+  }).join('')}`;
+}
+
+function moveCrosshair(clientX) {
+  const svg = document.querySelector('.cmp-chart');
+  const tip = $('compareCross');
+  if (!svg || !tip) return;
+  const box = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const left = Number(svg.dataset.plotLeft);
+  const right = Number(svg.dataset.plotRight);
+  const vx = ((clientX - box.left) / box.width) * vb.width;
+  if (vx < left || vx > right) { hideCrosshair(); return; }
+  const x0 = E.dayNumber(svg.dataset.xMin);
+  const x1 = E.dayNumber(svg.dataset.xMax);
+  const day = E.fromDayNumber(Math.round(x0 + ((vx - left) / (right - left)) * (x1 - x0)));
+  const line = svg.querySelector('.cmp-cross');
+  line.setAttribute('x1', vx.toFixed(1));
+  line.setAttribute('x2', vx.toFixed(1));
+  line.removeAttribute('hidden');
+  tip.innerHTML = crosshairRowsHTML(day);
+  tip.hidden = false;
+  tip.dataset.day = day;
+}
+
+function hideCrosshair() {
+  const line = document.querySelector('.cmp-cross');
+  if (line) line.setAttribute('hidden', '');
+  const tip = $('compareCross');
+  if (tip) { tip.hidden = true; delete tip.dataset.day; }
+}
+
+// ── 比較表格與匯出（spec-compare.md §5）──────────────────────────
+// §5.1 本表**不得**出現任何跨欄的合計、平均、差額或排名；同代號自身的歷次差額照常呈現。
+const SUMMARY_ROWS = [
+  ['中文品名', (s) => s.meta?.chName ?? ''],
+  ['英文品名', (s) => s.meta?.enName ?? ''],
+  ['成分', (s) => s.meta?.ingredient ?? ''],
+  ['規格', (s) => (s.meta?.strength ? `${s.meta.strength}${s.meta.strengthUnit ? ` ${s.meta.strengthUnit}` : ''}` : '')],
+  ['劑型', (s) => s.meta?.dosageForm ?? ''],
+  ['ATC', (s) => s.meta?.atcCode ?? ''],
+  ['藥商', (s) => s.meta?.manufacturer ?? ''],
+  ['現行支付價', (s) => E.currentLabel({ ...s.summary, pricedBefore: s.summary.current ? E.pricedBefore(s.records, s.summary.current) : null })],
+  ['預告', (s) => (s.summary.upcoming ? E.upcomingLabel(s.summary.upcoming, E.pricedBefore(s.records, s.summary.upcoming)) : '無已公告的預告異動')],
+  ['最早可取得紀錄日期', (s) => s.records.find((r) => r.from <= state.today)?.from ?? '—'],
+  ['歷史調價次數', (s) => `${s.summary.priceChangeCount} 次`],
+  ['最近一次調整', (s) => E.latestEventLabel(s.summary.latestEvent)],
+  ['總變化', (s) => E.totalChangeLabel(s.summary)],
+  ['品質提示', (s) => {
+    const flags = (s.entry.flags || []).map((f) => E.UPCOMING_FLAG_TEXT[f] || f);
+    if (s.entry.invalidRecords?.length) flags.push(`該代號有 ${s.entry.invalidRecords.length} 列日期異常`);
+    return flags.join('；') || '無';
+  }],
+];
+
+function compareSummaryHTML(m) {
+  const cols = m.series.map((s) => {
+    if (s.status !== 'ok') return { ...s, unavailable: COMPARE_STATUS_TEXT[s.status] };
+    return { ...s, meta: E.selectMeta(s.entry, m.T), summary: E.summaryAt(s.records, m.T) };
+  });
+  const head = cols.map((s) => `<th scope="col" data-slot="${s.slot + 1}">
+    <span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(s.code)}</span></th>`).join('');
+  const body = SUMMARY_ROWS.map(([label, get]) => `<tr><th scope="row">${esc(label)}</th>${cols.map((s) => {
+    // 非成功代號：欄位保留、值改為取得狀態，不得填 0、不得留白、不得沿用其他代號
+    const v = s.unavailable ? s.unavailable : (get(s) || '—');
+    return `<td${s.unavailable ? ' class="cmp-unavailable"' : ''}>${esc(v)}</td>`;
+  }).join('')}</tr>`).join('');
+  const links = cols.map((s) => `<td><a href="?code=${encodeURIComponent(s.code)}" data-code="${esc(s.code)}" data-action="to-detail">查看完整歷史 ↗</a></td>`).join('');
+  return `<section class="card cmp-card"><h3>摘要對照</h3>
+    <p class="hint">參考日期 <span class="mono">${esc(m.T)}</span>（依您裝置的日期）。本表不做任何跨品項的合計、平均或排名。</p>
+    <div class="table-wrap"><table class="cmp-summary">
+      <thead><tr><th scope="col">指標</th>${head}</tr></thead>
+      <tbody>${body}<tr><th scope="row">完整歷史</th>${links}</tr></tbody>
+    </table></div></section>`;
+}
+
+/** §5.2 的代號篩選與 §4.2.1 的可見性**彼此獨立**，各有自己的控制項。 */
+function tableSeries(m) {
+  return m.series.filter((s) => s.status === 'ok' && !state.compareTableFilter.has(s.code))
+    .map((s) => ({ code: s.code, slot: s.slot, records: s.records, invalidRecords: s.entry.invalidRecords || [] }));
+}
+
+function compareTableHTML(m) {
+  const rows = E.mergedEvents(tableSeries(m), { newestFirst: state.compareNewestFirst });
+  const missing = m.series.filter((s) => s.status !== 'ok');
+  const filtered = m.series.filter((s) => s.status === 'ok' && state.compareTableFilter.has(s.code));
+  const names = Object.fromEntries(m.series.map((s) => [s.code, s.status === 'ok' ? (E.selectMeta(s.entry, m.T)?.chName ?? '') : '']));
+  const note = [
+    missing.length ? `不含 ${missing.length} 個尚未取得資料的品項（${missing.map((s) => s.code).join('、')}）` : '',
+    filtered.length ? `已篩除 ${filtered.map((s) => s.code).join('、')}` : '',
+  ].filter(Boolean).join('；');
+
+  return `<section class="card cmp-card"><h3>合併事件時間表（${rows.length} 列）</h3>
+    ${note ? `<p class="hint">${esc(note)}</p>` : ''}
+    <div class="table-tools">
+      <div class="cmp-group" role="group" aria-label="表格代號篩選">
+        ${m.series.filter((s) => s.status === 'ok').map((s) => `<button type="button" data-action="cmp-filter" data-code="${esc(s.code)}"
+          aria-pressed="${!state.compareTableFilter.has(s.code)}">${esc(s.code)}</button>`).join('')}
+      </div>
+      <button type="button" data-action="cmp-sort" aria-pressed="${state.compareNewestFirst}">排序：${state.compareNewestFirst ? '新 → 舊' : '舊 → 新'}</button>
+      <button type="button" id="cmpCsv" data-action="cmp-csv" ${compareComplete() ? '' : 'disabled title="部分品項尚未載入完成"'}>匯出 CSV</button>
+    </div>
+    <div class="table-wrap"><table class="history cmp-events">
+      <thead><tr><th>生效日</th><th>迄日</th><th>代號</th><th>品名</th><th>支付價</th>
+        <th>與前次差額</th><th>變動 %</th><th>狀態</th></tr></thead>
+      <tbody>${rows.map((row) => eventRowHTML(row, names[row.code], m.T)).join('')}</tbody>
+    </table></div></section>`;
+}
+
+function eventRowHTML(row, name, T) {
+  const r = row.record;
+  const id = `${row.code}-${row.invalid ? 'x' : 'r'}${row.index}`;
+  if (row.invalid) {
+    return `<tr class="invalid-row" data-row="${id}" data-slot="${row.slot + 1}">
+      <td class="mono">${esc(r.rawFrom || '—')}</td><td class="mono">${esc(r.rawTo || '—')}</td>
+      <td><span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(row.code)}</span></td>
+      <td>${esc(name || '')}</td><td>${esc(r.rawPrice)}</td><td>—</td><td>—</td>
+      <td>日期異常（${esc(E.INVALID_TEXT[r.error] || r.error)}）</td></tr>`;
+  }
+  const notes = [];
+  if (r.from > T) notes.push('預告');
+  if (r.crossesStop) notes.push('跨越停止期間');
+  if ((r.flags || []).includes('gap_before')) notes.push('前有空窗');
+  return `<tr data-row="${id}" data-slot="${row.slot + 1}"${r.from > T ? ' class="upcoming-row-tr"' : ''}>
+    <td class="mono">${esc(r.from)}</td><td class="mono">${esc(r.to ?? '—')}</td>
+    <td><span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(row.code)}</span></td>
+    <td>${esc(name || '')}</td>
+    <td>${esc(E.stateLabel(r, row.prior, 'cell'))}</td>
+    <td class="num">${esc(r.absoluteChange === null ? '—' : E.fmtSigned(E.fmtMoney(r.absoluteChange)))}</td>
+    <td class="num">${esc(r.percentChange === null ? '—' : E.fmtPct(r.percentChange))}</td>
+    <td>${esc(E.eventText(r, row.prior))}${notes.length ? `（${esc(notes.join('、'))}）` : ''}</td></tr>`;
+}
+
+function exportCompareCSV() {
+  const m = compareModel();
+  if (!compareComplete()) return;                 // 未完整成功時停用匯出（§5.3）
+  const series = tableSeries(m);
+  const rows = E.mergedEvents(series, { newestFirst: state.compareNewestFirst });
+  const names = Object.fromEntries(m.series.map((s) => [s.code, s.status === 'ok' ? (E.selectMeta(s.entry, m.T)?.chName ?? '') : '']));
+  const filteredOut = m.series.filter((s) => state.compareTableFilter.has(s.code)).map((s) => s.code);
+  const csv = E.compareCSV(rows, {
+    codes: series.map((s) => s.code),
+    today: m.T,
+    names,
+    filterNote: filteredOut.length ? `已篩除 ${filteredOut.join('、')}` : '',
+  });
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `nhi_compare_${series.map((s) => s.code).join('_')}_${m.T}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** 點擊圖上 marker → 捲動至對應列並高亮；該列已被篩選隱藏時明說，不自動解除篩選。 */
+function focusEventRow(code, index) {
+  const row = document.querySelector(`[data-row="${CSS.escape(`${code}-r${index}`)}"]`);
+  const note = $('compareRowNote');
+  if (!row) {
+    note.textContent = '該列已被目前的表格篩選隱藏。';
+    return;
+  }
+  note.textContent = '';
+  for (const el of document.querySelectorAll('.row-focus')) el.classList.remove('row-focus');
+  row.classList.add('row-focus');
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 // ── 事件 ────────────────────────────────────────────────────────
@@ -983,6 +1707,48 @@ function bind() {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       navigate(el.dataset.code);
+    } else if (action === 'cmp-filter') {
+      const code = el.dataset.code;
+      if (state.compareTableFilter.has(code)) state.compareTableFilter.delete(code);
+      else state.compareTableFilter.add(code);
+      renderCompare();
+    } else if (action === 'cmp-sort') {
+      state.compareNewestFirst = !state.compareNewestFirst;
+      renderCompare();
+    } else if (action === 'cmp-csv') {
+      exportCompareCSV();
+    } else if (action === 'cmp-preset') {
+      state.comparePreset = el.dataset.preset;      // preset 只裁切視窗，不改 T 與基準
+      renderCompare();
+    } else if (action === 'cmp-mode') {
+      state.compareMode = el.dataset.mode;
+      renderCompare();
+    } else if (action === 'cmp-toggle') {
+      const code = el.dataset.code;
+      if (state.compareHidden.has(code)) state.compareHidden.delete(code);
+      else state.compareHidden.add(code);
+      renderCompare();
+    } else if (action === 'add-compare') {
+      e.preventDefault();
+      addCompare(el.dataset.code);
+    } else if (action === 'tray-remove') {
+      e.preventDefault();
+      removeCompare(el.dataset.code);
+    } else if (action === 'tray-clear') {
+      e.preventDefault();
+      setCompare([], { syncUrl: false });
+      if (!$('compareView').hidden) { history.pushState(null, '', location.pathname); showSearch(); }
+    } else if (action === 'tray-start') {
+      e.preventDefault();
+      performance.mark('compare-open-start');          // 情境 A 的起點
+
+      history.pushState({ fromSearch: true }, '', `?codes=${encodeURIComponent(E.serializeCompareCodes(state.compare.items))}`);
+      showCompare();
+      window.scrollTo(0, 0);
+    } else if (action === 'compare-retry') {
+      const failed = state.compare.items
+        .filter((x) => state.compareData.get(x.code)?.status === 'error').map((x) => x.code);
+      if (failed.length) loadCompareData({ only: failed });
     } else if (action === 'upcoming-csv') {
       exportUpcomingCSV();
     } else if (action === 'retry-upcoming') {
@@ -1012,6 +1778,18 @@ function bind() {
   $('upQ').addEventListener('input', (e) => { if (!e.isComposing) scheduleUpcomingRender(); });
   $('upQ').addEventListener('compositionend', scheduleUpcomingRender);
 
+  // crosshair：滑鼠移動定位；觸控裝置改為點擊定位、再點空白處取消
+  $('compareBody').addEventListener('mousemove', (e) => {
+    if (e.target.closest('.cmp-chart')) moveCrosshair(e.clientX);
+  });
+  $('compareBody').addEventListener('mouseleave', hideCrosshair);
+  $('compareBody').addEventListener('click', (e) => {
+    const marker = e.target.closest('.cmp-marker');
+    if (marker) focusEventRow(marker.dataset.code, Number(marker.dataset.index));
+    if (e.target.closest('.cmp-chart')) moveCrosshair(e.clientX);
+    else if (!e.target.closest('.cross-tip')) hideCrosshair();
+  });
+
   window.addEventListener('popstate', route);
 
   let resizeTimer = 0;
@@ -1028,6 +1806,7 @@ try {
   if (localStorage.getItem('showTerminated') === '1') $('showTerminated').checked = true;
 } catch { /* 無 storage */ }
 bind();
+restoreCompare();
 loadCore();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {

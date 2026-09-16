@@ -14,6 +14,12 @@
 //   §5.5.1 預告清單合法性   → validateUpcoming()
 //   §5.1 徽章數字（依 T）   → upcomingPendingCount()
 //
+// 規則對應 spec-compare.md：
+//   §4.3 兩層狀態          → dayState()、statusBands()
+//   §4.1.1 基準資格        → relativeBaseline()、relativeIndex()
+//   §4.1.2 繪製資格        → compareSegments()
+//   §4.4 共用 X 軸與 preset → compareRange()、minusYears()
+//
 // 日期一律為 ISO 'YYYY-MM-DD' 字串（字典序即時間序）；有效區間為閉區間 [from, to]，to=null 為無迄日。
 
 export const MAX_RESULTS = 50;
@@ -905,3 +911,349 @@ export const UPCOMING_FLAG_TEXT = {
   question_mark: '品名含「?」（來源缺字）',
   inconsistent_metadata: '描述欄位不一致',
 };
+
+// ── 多代號比較：每代號契約（spec-compare.md §4.1、§4.3、§4.4）──────
+// 比較頁**不另寫一套摘要邏輯**：摘要、描述欄位、狀態標籤一律重用 summaryAt()／
+// selectMeta()／stateLabel()。本節只新增「把各代號結果放到共同座標」所需的純函式。
+
+export const COMPARE_MAX = 4;
+const CODE_RE = /^[A-Z0-9]{10}$/;                 // §3.3 第 5 步（v0.3.1 釘死）
+
+export const isValidCode = (c) => CODE_RE.test(c);
+
+/** 該代號所有 records 的有效區間聯集。open＝有開放迄日（右界無限）。 */
+function unionBounds(records) {
+  if (!records.length) return null;
+  let min = records[0].from;
+  let max = null;
+  let open = false;
+  for (const r of records) {
+    if (r.from < min) min = r.from;
+    if (r.to === null) open = true;
+    else if (max === null || r.to > max) max = r.to;
+  }
+  return { min, max, open };
+}
+
+/**
+ * §4.3 第二層：某一日的日期／價格狀態，**由上而下取第一個符合**。
+ * → { rule, kind, tooltip, record }
+ *
+ * 序 2／3／4 依**有效區間聯集**判定，不依最後一列的位置：長區間包覆短區間時，
+ * 「最後起日那筆」已結束不代表資料覆蓋已結束（spec.md §6.4 的累計最大迄日原則）。
+ */
+export function dayState(records, day, priors = priorPrices(records)) {
+  const bounds = unionBounds(records);
+  if (!bounds) return { rule: 0, kind: 'no_records', tooltip: '無有效支付紀錄', record: null };
+
+  const eff = records.filter((r) => isEffective(r, day));
+  // 衝突 flag 只作用於帶該 flag 的那筆紀錄所涵蓋的日期，不擴張到首筆前或空窗
+  if (eff.length > 1 || eff.some((r) => (r.flags || []).includes('conflicting_price_interval'))) {
+    return { rule: 1, kind: 'conflict', tooltip: '來源紀錄衝突，無法判定單一支付價', record: null };
+  }
+  if (day < bounds.min) return { rule: 2, kind: 'before', tooltip: '尚未有紀錄', record: null };
+  if (!bounds.open && bounds.max !== null && day > bounds.max) {
+    return { rule: 3, kind: 'uncovered', tooltip: '本站資料未涵蓋此日期', record: null };
+  }
+  if (eff.length === 0) return { rule: 4, kind: 'gap', tooltip: '此日期無支付紀錄', record: null };
+
+  const r = eff[0];
+  const prior = priors.get(r) ?? null;
+  switch (r.priceState) {
+    case 'malformed':
+      return { rule: 5, kind: 'malformed', tooltip: `資料格式異常（原始值：${r.rawPrice}）`, record: r };
+    case 'missing':
+      return { rule: 6, kind: 'missing', tooltip: '來源無支付價資料', record: r };
+    case 'terminated':
+      // 該列之前從未有價：不得出現「終止」字樣（spec.md §5.3 首列 0 元例外）
+      return prior === null
+        ? { rule: 7, kind: 'unpriced_zero', tooltip: '健保支付價 0 元（此前無有價紀錄）', record: r }
+        : { rule: 8, kind: 'terminated', tooltip: `已終止支付（終止前 ${fmtMoney(prior)} 元）`, record: r };
+    case 'suspended':
+      return {
+        rule: 9,
+        kind: 'suspended',
+        tooltip: prior === null
+          ? `暫停支付（來源標示「${r.rawPrice}」）`
+          : `暫停支付（來源標示「${r.rawPrice}」，暫停前 ${fmtMoney(prior)} 元）`,
+        record: r,
+      };
+    default:
+      return {
+        rule: 10,
+        kind: 'priced',
+        tooltip: `${r.rawPrice} 元（${r.from} ～ ${r.to === null ? '無迄日' : r.to}）`,
+        record: r,
+      };
+  }
+}
+
+/**
+ * §4.3 狀態時間帶：把 [winFrom, winTo] 切成連續不重疊的段，每段一個狀態。
+ * 邊界取自各 record 的起日與迄日次日，因此段內狀態必定一致；相鄰同狀態者合併。
+ */
+export function statusBands(records, winFrom, winTo, today) {
+  if (!records.length || winTo < winFrom) return [];
+  const priors = priorPrices(records);
+  const marks = new Set([winFrom]);
+  for (const r of records) {
+    if (r.from > winFrom && r.from <= winTo) marks.add(r.from);
+    if (r.to !== null) {
+      const next = addDays(r.to, 1);
+      if (next > winFrom && next <= winTo) marks.add(next);
+    }
+  }
+  const starts = [...marks].sort();
+  const out = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    const from = starts[i];
+    const to = i + 1 < starts.length ? addDays(starts[i + 1], -1) : winTo;
+    const st = dayState(records, from, priors);
+    const prev = out[out.length - 1];
+    if (prev && prev.kind === st.kind && prev.tooltip === st.tooltip) prev.to = to;
+    else out.push({ from, to, kind: st.kind, rule: st.rule, tooltip: st.tooltip, record: st.record, upcoming: from > today });
+  }
+  return out;
+}
+
+/**
+ * §4.1.1 相對變化模式的基準。
+ * → { kind: 'ok'|'none'|'undeterminable', record, date, price, rawPrice }
+ *
+ * 候選資格：`priced`、不帶 `conflicting_price_interval`、且其起日當天不存在其他有效紀錄。
+ * 跳過不合格的更早列時，圖例顯示的是**實際採用那一列**的起日，不得稱為「歷史首筆價格」。
+ */
+export function relativeBaseline(records) {
+  const priced = records.filter((r) => r.priceState === 'priced');
+  if (!priced.length) return { kind: 'none', record: null };
+  const eligible = priced.filter((r) => !(r.flags || []).includes('conflicting_price_interval')
+    && records.filter((o) => isEffective(o, r.from)).length === 1);
+  if (!eligible.length) return { kind: 'undeterminable', record: null };
+  const rec = eligible.reduce((m, r) => (r.from < m.from ? r : m), eligible[0]);
+  return { kind: 'ok', record: rec, date: rec.from, price: rec.price, rawPrice: rec.rawPrice };
+}
+
+/** 指數值＝100 × 當期價 ÷ 自身基準價，四捨五入（遠離 0）至小數 1 位；以十進位計算避免浮點邊界。 */
+export function relativeIndex(rawPrice, baseRawPrice) {
+  const p = parseDecimal(rawPrice);
+  const b = parseDecimal(baseRawPrice);
+  if (!p || !b || p.int <= 0n || b.int <= 0n) return null;
+  const [pi, bi] = align(p, b);
+  const tenths = roundDiv(pi * 1000n, bi);
+  return `${tenths / 10n}.${tenths % 10n}`;
+}
+
+/**
+ * §4.1.2 繪製資格＝**有效有價區間與顯示視窗相交**（不是「起日落在視窗內」）。
+ * 回傳裁切到視窗內的有價線段；`clipped*` 表示該段在視窗外仍延續。
+ */
+export function compareSegments(records, winFrom, winTo, today) {
+  const out = [];
+  for (const r of records) {
+    if (r.priceState !== 'priced') continue;
+    const segTo = r.to === null ? winTo : r.to;
+    if (segTo < winFrom || r.from > winTo) continue;          // 不相交
+    out.push({
+      from: r.from < winFrom ? winFrom : r.from,
+      to: segTo > winTo ? winTo : segTo,
+      price: r.price,
+      rawPrice: r.rawPrice,
+      record: r,
+      upcoming: r.from > today,
+      clippedLeft: r.from < winFrom,
+      clippedRight: segTo > winTo,
+    });
+  }
+  return out;
+}
+
+/** 視窗內是否有可繪製的有價區間；配合 §4.1.1 的三種無線狀態使用。 */
+export function hasDrawableSegment(records, winFrom, winTo, today) {
+  return compareSegments(records, winFrom, winTo, today).length > 0;
+}
+
+export const COMPARE_PRESETS = { all: null, y3: 3, y5: 5, y10: 10 };
+
+/** 日期減 N 年；2 月 29 日等不存在的日子夾到當月最後一天（閏日以實際日曆計算）。 */
+export function minusYears(iso, years) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const target = y - years;
+  const lastDay = new Date(Date.UTC(target, m, 0)).getUTCDate();
+  const day = Math.min(d, lastDay);
+  return `${String(target).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/**
+ * §4.4 共用 X 軸範圍。右界＝max(T, 最後一筆預告起日)——預告要能看見。
+ * preset 只裁切左界，**不改變** T、基準與摘要參考日。
+ * → { from, to } 或 null（無任何可繪製日期列）
+ */
+export function compareRange(series, today, preset = 'all') {
+  const limit = addDays(today, 365 * FAR_FUTURE_YEARS);
+  const recs = series.flatMap((s) => s.records || []).filter((r) => r.from <= limit);
+  if (!recs.length) return null;
+  let earliest = recs[0].from;
+  let lastFrom = recs[0].from;
+  for (const r of recs) {
+    if (r.from < earliest) earliest = r.from;
+    if (r.from > lastFrom) lastFrom = r.from;
+  }
+  const to = lastFrom > today ? lastFrom : today;
+  const years = COMPARE_PRESETS[preset] ?? null;
+  return { from: years === null ? earliest : minusYears(today, years), to };
+}
+
+/**
+ * §3.3 八步：URL → 選定清單。**順序不得調換**（先清洗去重合併，最後才截斷）。
+ * → { items: [{ code, valid }], skipped, full }
+ *   `items` 為截斷後的結果（≤ 4），`full` 為截斷前的完整有序清單，
+ *   `skipped` ＝ `full.length − COMPARE_MAX`（未超量為 0）。
+ *
+ * 格式不合法與確認不存在的代號**佔用名額**（它們要顯示在畫面上），所以截斷只依
+ * 格式層資訊，不因載入結果重新截斷。
+ */
+export function parseCompareCodes(search) {
+  const codesRaw = rawParam(search, 'codes');            // 1. 同名參數取第一個
+  const codeRaw = rawParam(search, 'code');
+  const tokens = splitCodes(codesRaw);                   // 2–3. 解碼一次 → 切分 → 丟棄空 token
+
+  const seen = new Set();
+  const list = [];
+  for (const token of tokens) {
+    const code = token.trim().toUpperCase();             // 4. 清洗
+    if (!code || seen.has(code)) continue;               // 6. 去重：保留最先出現者
+    seen.add(code);
+    list.push({ code, valid: isValidCode(code) });       // 5. 格式檢查（不合法者保留）
+  }
+
+  // 7. 合併 ?code=：無條件置於首位；已在清單中則移至首位，不重複加入。此步不截斷
+  const single = (splitCodes(codeRaw)[0] || '').trim().toUpperCase();
+  if (single) {
+    const at = list.findIndex((x) => x.code === single);
+    if (at >= 0) list.unshift(list.splice(at, 1)[0]);
+    else list.unshift({ code: single, valid: isValidCode(single) });
+  }
+
+  // 8. 截斷：N 一律以完整清單長度計算
+  return { items: list.slice(0, COMPARE_MAX), skipped: Math.max(0, list.length - COMPARE_MAX), full: list };
+}
+
+/** 取未解碼的原始參數值（URLSearchParams 會先解一次，再解就是解兩次）。 */
+function rawParam(search, key) {
+  const q = String(search || '').replace(/^\?/, '');
+  for (const part of q.split('&')) {
+    if (!part) continue;
+    const i = part.indexOf('=');
+    if ((i === -1 ? part : part.slice(0, i)) !== key) continue;
+    return i === -1 ? '' : part.slice(i + 1);
+  }
+  return null;
+}
+
+/** 解碼恰一次 → 以逗號切分 → 丟棄空 token（空 token 不計入略過數）。解碼失敗整個參數視為空。 */
+function splitCodes(raw) {
+  if (raw === null) return [];
+  let decoded;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return [];
+  }
+  return decoded.split(',').filter((t) => t.trim() !== '');
+}
+
+/** 選定清單 → `?codes=` 參數值（大寫、逗號分隔、依序）。 */
+export function serializeCompareCodes(items) {
+  return items.map((x) => (typeof x === 'string' ? x : x.code)).join(',');
+}
+
+// 歷史表／合併事件表／CSV 共用的事件與異常文案（spec.md §8.3、spec-compare.md §5.2）
+export const EVENT_TEXT = {
+  initial: '最早紀錄', first_priced: '首次有價', increase: '調升', decrease: '調降',
+  unchanged: '同價續期', terminated: '終止支付', suspended: '暫停支付',
+  relisted: '恢復支付（跨越停止期間）', unknown: '變動無法判定',
+};
+export const INVALID_TEXT = { blank_start: '起日空白', invalid_date: '日期無法解析', inverted_interval: '起日晚於迄日' };
+
+export function eventText(r, prior) {
+  if (r.eventType === 'unchanged' && r.priceState !== 'priced') return '同狀態續期';
+  // 此前從未有價的 0 元：事件欄不得稱「終止」（spec.md §5.3）
+  if (r.eventType === 'terminated' && isUnpricedZero(r, prior)) return '0 元（此前無有價紀錄）';
+  return EVENT_TEXT[r.eventType] || r.eventType;
+}
+
+/**
+ * §5.2 合併事件時間表：所有選定代號的 records 依 `from` 合併排序。
+ * `series` = [{ code, slot, records, invalidRecords }]（只傳通過代號篩選者）。
+ *
+ * - 有效列：`from` asc → `code` asc → 原 `records` 索引 asc（newestFirst 時只反轉主鍵）
+ * - `invalidRecords` **一律置於全表末尾**（全表跨代號合併排序，不存在「該代號區塊末尾」），
+ *   其內部以 `code` asc → 原索引 asc
+ * - 每一列都能唯一回指來源紀錄（`code` ＋ `index` ＋ `invalid`），供 M15 的守恆驗證
+ */
+export function mergedEvents(series, { newestFirst = true } = {}) {
+  const valid = [];
+  const invalid = [];
+  for (const s of series) {
+    const priors = priorPrices(s.records || []);
+    (s.records || []).forEach((r, index) => valid.push({
+      code: s.code, slot: s.slot, index, record: r, invalid: false, prior: priors.get(r) ?? null,
+    }));
+    (s.invalidRecords || []).forEach((r, index) => invalid.push({ code: s.code, slot: s.slot, index, record: r, invalid: true }));
+  }
+  valid.sort((a, b) => (a.record.from < b.record.from ? -1 : a.record.from > b.record.from ? 1
+    : a.code < b.code ? -1 : a.code > b.code ? 1 : a.index - b.index));
+  if (newestFirst) valid.reverse();
+  invalid.sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : a.index - b.index));
+  return [...valid, ...invalid];
+}
+
+const CSV_CRLF = '\r\n';
+export const COMPARE_CSV_HEADER = ['生效日', '迄日', '代號', '品名', '支付價', '原始支付價字串',
+  '與前次差額', '變動%', '狀態', '備註'];
+
+/**
+ * §5.3 CSV：內容＝合併事件表**目前篩選後**的列，與畫面所見一致。
+ * `rows` 為 mergedEvents() 的結果；`names` 為 code → 品名。
+ */
+export function compareCSV(rows, { codes, today, filterNote = '', names = {} }) {
+  const preamble = '健保藥價歷史查詢 — 多代號比較匯出。'
+    + '資料來源：中央健康保險署「健保用藥品項查詢項目檔」（A21030000I-E41001-001）。'
+    + `比較代號：${codes.join('、')}；參考日期 ${today}${filterNote ? `；${filterNote}` : ''}。`
+    + '本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。'
+    + '不同健保代號代表不同給付品項；並列呈現不表示品項可互相替代，亦不構成任何採購或換藥建議。';
+
+  const lines = [csvField(preamble), COMPARE_CSV_HEADER.map(csvField).join(',')];
+  for (const row of rows) {
+    const r = row.record;
+    lines.push([
+      row.invalid ? r.rawFrom : r.from,
+      row.invalid ? r.rawTo : (r.to ?? ''),
+      row.code,
+      names[row.code] ?? '',
+      row.invalid ? '' : stateLabel(r, row.prior, 'cell'),
+      r.rawPrice,
+      row.invalid ? '' : fmtCsvNumber(r.absoluteChange),
+      row.invalid ? '' : fmtCsvNumber(r.percentChange),
+      row.invalid ? '日期異常' : eventText(r, row.prior),
+      row.invalid ? `日期異常（${INVALID_TEXT[r.error] || r.error}）` : eventNote(r, today),
+    ].map(csvField).join(','));
+  }
+  return `﻿${lines.join(CSV_CRLF)}${CSV_CRLF}`;
+}
+
+function fmtCsvNumber(x) {
+  if (x === null || x === undefined) return '';
+  const two = x.toFixed(2);
+  return Number(two) === x ? two : String(x);
+}
+
+function eventNote(r, today) {
+  const notes = [];
+  if (r.from > today) notes.push('預告');
+  if (r.crossesStop) notes.push('跨越停止期間');
+  if ((r.flags || []).includes('gap_before')) notes.push('前有空窗');
+  if ((r.flags || []).includes('overlap')) notes.push('重疊');
+  if ((r.flags || []).includes('conflicting_price_interval')) notes.push('同期間有不同支付價');
+  return notes.join('；');
+}
