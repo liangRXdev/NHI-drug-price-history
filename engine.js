@@ -641,3 +641,77 @@ export function validateUpcoming(payload, meta) {
 export function upcomingPendingCount(items, T) {
   return items.reduce((n, it) => n + (it.effectiveDate > T ? 1 : 0), 0);
 }
+
+/**
+ * 預告列的呈現決策（spec-upcoming §4.1）：**由上而下取第一個符合的規則**。
+ * → { rule, label, sub, type }；rule 為 §4.1 序號，type 為 §4.1.1 的篩選分類。
+ *
+ * 主鍵是 priceState ＋ 該列之前有無 priced，不是 eventType：首列即 0 元的代號
+ * 事件是 initial，用 eventType 當索引鍵會讓它沒有任何標籤可用（plan-verdict-upcoming H1）。
+ * 序 14 是安全網：任何未預期組合一律落到「無法判定」，不得靜默顯示成確定的價格事件。
+ */
+export function upcomingDecision(it) {
+  const d = it.effectiveDate;
+  const Y = it.rawPrice;
+  const before = fmtMoney(it.pricedBefore);          // X：停止前最後一個有價金額
+  const prev = fmtMoney(it.previousPrice);           // X：priced 列的前一筆有價金額
+  const pct = it.percentChange === null ? '' : `（${fmtPct(it.percentChange)}`;
+
+  if ((it.flags || []).includes('conflicting_price_interval') || it.eventType === 'unknown') {
+    return { rule: 1, label: '無法判定', sub: '來源資料異常，請開啟詳細頁確認', type: 'other' };
+  }
+  if (it.priceState === 'malformed') {
+    return { rule: 2, label: '資料格式異常', sub: `${d} 起（原始值：${Y}）`, type: 'other' };
+  }
+  if (it.priceState === 'missing') {
+    return { rule: 3, label: '來源無支付價資料', sub: `${d} 起；請開啟詳細頁確認`, type: 'other' };
+  }
+  if (it.priceState === 'terminated') {
+    // 此前無有價紀錄者不得出現「終止」字樣（spec.md §5.3 首列 0 元例外）
+    if (!it.everPriced) {
+      return { rule: 4, label: '健保支付價 0 元', sub: `${d} 起（此前無有價紀錄）`, type: 'first_priced' };
+    }
+    if (it.previousState === 'terminated') {
+      return { rule: 5, label: '終止支付續期', sub: `${d} 起仍為 0 元；終止前 ${before} 元`, type: 'terminated' };
+    }
+    return { rule: 6, label: '終止支付', sub: `${d} 起；終止前 ${before} 元`, type: 'terminated' };
+  }
+  if (it.priceState === 'suspended') {
+    if (!it.everPriced) {
+      return { rule: 7, label: '暫停支付', sub: `${d} 起（此前無有價紀錄，來源標示「${Y}」）`, type: 'first_priced' };
+    }
+    if (it.previousState === 'suspended') {
+      return { rule: 8, label: '暫停支付續期', sub: `${d} 起仍為暫停；暫停前 ${before} 元`, type: 'suspended' };
+    }
+    return { rule: 9, label: '暫停支付', sub: `${d} 起；暫停前 ${before} 元（來源標示「${Y}」）`, type: 'suspended' };
+  }
+  if (it.priceState === 'priced') {
+    if (!it.everPriced) return { rule: 10, label: '首次有價', sub: `${d} 起 ${Y} 元`, type: 'first_priced' };
+    if (it.previousState === 'terminated' || it.previousState === 'suspended') {
+      // relisted 的差額與百分比在 record 上已有值，必須呈現，不得只顯示新價（§4.2）
+      return {
+        rule: 11,
+        label: '恢復支付',
+        sub: `${d} 起 ${before} → ${Y} 元${pct ? `${pct}，跨越停止期間）` : '（跨越停止期間）'}`,
+        type: 'relisted',
+      };
+    }
+    if (it.previousState === 'priced' && it.previousPrice !== null) {
+      if (it.price === it.previousPrice) {
+        return { rule: 12, label: '續期（支付價不變）', sub: `${d} 起 ${Y} 元，與前期相同`, type: 'unchanged' };
+      }
+      const up = it.price > it.previousPrice;
+      return {
+        rule: 13,
+        label: up ? '調升' : '調降',
+        sub: `${d} 起 ${prev} → ${Y} 元${pct ? `${pct}）` : ''}`,
+        type: up ? 'increase' : 'decrease',
+      };
+    }
+  }
+  return { rule: 14, label: '無法判定', sub: '來源資料異常，請開啟詳細頁確認', type: 'other' };
+}
+
+/** §5.3 篩選的 type 值域（§4.1.1 的完整映射結果）。 */
+export const UPCOMING_TYPES = ['all', 'decrease', 'increase', 'terminated', 'suspended',
+  'relisted', 'first_priced', 'unchanged', 'other'];

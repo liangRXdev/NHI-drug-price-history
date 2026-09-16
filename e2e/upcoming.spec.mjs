@@ -173,6 +173,33 @@ test('U11 版本不一致後取得一致資料 → 恢復', async ({ page }) => 
   await expect(banner(page).locator('.alert--error')).toHaveCount(0);
 });
 
+// ── §4.1 標籤（U4 的整合面；逐條字串在 tests-js/upcoming.test.mjs）──
+test('U13 每列都有事件標籤與金額變化，flags 提示歸屬正確的代號', async ({ page }) => {
+  await open(page);
+  const row = (code) => rows(page).filter({ has: page.locator(`.r-code:text-is("${code}")`) });
+  await expect(row('AB47689100').locator('[data-label]')).toHaveText('調升');
+  await expect(row('AB47689100').locator('[data-sub]')).toHaveText('2026-10-01 起 6.90 → 7.90 元（+14.49%）');
+  await expect(row('BC05037209').locator('[data-label]')).toHaveText('終止支付');
+  await expect(row('BC05037209').locator('[data-sub]')).toHaveText('2026-10-01 起；終止前 245.00 元');
+  // BC26467100 的描述欄位不一致（預告列成分欄損毀）→ 品質提示只出現在這一列
+  await expect(row('BC26467100').locator('.tag.warn')).toContainText('描述欄位不一致');
+  await expect(row('AB47689100').locator('.tag.warn')).toHaveCount(0);
+  // 描述欄位取自 build 日有效列，不得取預告列本身
+  await expect(row('BC26467100')).toContainText('AMLODIPINE BESYLATE');
+  await expect(row('BC26467100')).not.toContainText('2412402210');
+});
+
+test('U13 行動裝置寬度下免責聲明全文可見', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const note = page.locator('#upcomingView .hint').nth(1);
+  await expect(note).toContainText('不代表醫療院所實際採購價、零售價或病人自付金額');
+  await expect(note).toContainText('預告內容以健保署最新公告為準');
+  const clipped = await note.evaluate((el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+  expect(clipped).toBe(false);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
 // ── §6 與詳細頁的整合 ───────────────────────────────────────────
 test('§6 詳細頁：依自己的 history 判定是否顯示預告中心入口', async ({ page }) => {
   await mockSite(page, { today: '2026-09-11' });

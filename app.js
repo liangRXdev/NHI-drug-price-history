@@ -777,18 +777,27 @@ function renderUpcoming() {
   list.innerHTML = items.map(upcomingRowHTML).join('');
 }
 
+// 標籤底色只反映事件性質，不新增語彙（§4.1）
+const UPCOMING_TAG_CLASS = {
+  terminated: 'stop', suspended: 'warn', other: 'warn',
+  increase: 'info', decrease: 'info', relisted: 'info', first_priced: 'info', unchanged: 'info',
+};
+
 function upcomingRowHTML(it) {
+  const dec = E.upcomingDecision(it);
   const expired = it.effectiveDate <= state.today;
   const sub = [it.ingredient, it.strength ? `${it.strength}${it.strengthUnit ? ` ${it.strengthUnit}` : ''}` : '', it.dosageForm]
     .filter(Boolean).map(esc).join('・');
-  return `<div class="upcoming-row" data-code="${esc(it.code)}" data-date="${esc(it.effectiveDate)}">
+  return `<div class="upcoming-row" data-code="${esc(it.code)}" data-date="${esc(it.effectiveDate)}" data-type="${dec.type}" data-rule="${dec.rule}"${expired ? ' data-expired' : ''}>
     <div class="r-top"><span class="r-name">${dash(it.chName)}</span><span class="r-code mono">${esc(it.code)}</span></div>
     <div class="r-en">${dash(it.enName)}</div>
     ${sub ? `<div class="r-sub">${sub}</div>` : ''}
-    <div class="r-price"><span class="mono">${esc(it.effectiveDate)}</span> 起
-      ${expired ? '<span class="tag warn" data-expired>已生效（本站資料尚未重建）</span>' : ''}
-      ${dash(it.atcCode)}${flagTags(it.flags)}</div>
-    <div class="r-meta"><a href="?code=${encodeURIComponent(it.code)}" data-code="${esc(it.code)}" data-action="to-detail">查看歷史 ↗</a></div>
+    <div class="r-price">
+      <span class="tag ${UPCOMING_TAG_CLASS[dec.type] || 'warn'}" data-label>${esc(dec.label)}</span>
+      <span data-sub>${esc(dec.sub)}</span>
+      ${expired ? '<span class="tag warn" data-expired-tag>已生效（本站資料尚未重建）</span>' : ''}
+    </div>
+    <div class="r-meta">ATC ${dash(it.atcCode)}・<a href="?code=${encodeURIComponent(it.code)}" data-code="${esc(it.code)}" data-action="to-detail">查看歷史 ↗</a> ${flagTags(it.flags)}</div>
   </div>`;
 }
 
