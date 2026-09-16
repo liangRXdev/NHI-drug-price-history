@@ -1083,9 +1083,11 @@ MVP 以 **NHI drug code** 為單位。
 Semantic Versioning：
 
 - `v0.1.0`：MVP history search（含 `?code=` deep link）
-- `v0.2.0`：export / filters / ATC 搜尋 / 深色模式
-- `v0.3.0`：multi-code comparison
+- `v0.2.0`：預告中心（`spec-upcoming.md`）／export／filters／ATC 搜尋
+- `v0.3.0`：多代號比較（`spec-compare.md`）
 - `v1.0.0`：stable public release
+
+深色模式原列於 v0.2.0，未納入預告中心規格範圍，延後至另行提案時再排版號。
 
 ### Data
 
@@ -1095,6 +1097,7 @@ Semantic Versioning：
 - generatedAt
 - row count
 - coverage
+- upcomingRows／upcomingCodes（預告清單統計，僅供建置紀錄與 guard，不供前端顯示）
 
 避免將 build timestamp 寫入大型 history JSON，否則每次 build 都造成無意義 diff。
 

@@ -45,7 +45,7 @@ def test_every_unique_source_row_maps_to_exactly_one_output():
             + [make_row(code="B000000100", frm="1150101", to="1041301")]     # invalid_date
             + seq_rows(["7.00"], code="C000000100"))
     rows.append(dict(rows[0]))                                               # 完全重複列
-    shards, _, stats = build_outputs(rows, D)
+    shards, _, _, stats = build_outputs(rows, D)
 
     expected = Counter()
     for r in {tuple(sorted(x.items())): x for x in rows}.values():
@@ -152,7 +152,7 @@ def test_conflicting_prices_in_same_interval():
     assert len(recs) == 4
     assert [r["eventType"] for r in recs] == ["initial", "unknown", "unknown", "unknown"]
     assert all("conflicting_price_interval" in r["flags"] for r in recs[1:])
-    _, _, stats = build_outputs(rows, D)
+    _, _, _, stats = build_outputs(rows, D)
     assert stats["conflictingIntervals"] == 1
 
 

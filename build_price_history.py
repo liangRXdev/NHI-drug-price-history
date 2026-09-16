@@ -4,6 +4,7 @@
 下載 NHI 健保用藥品項檔（保留全部歷次列），輸出：
   data/drug_index.json   搜尋 index（每代號一筆，含 build 日 window）
   data/history/<XX>.json 依代號前 2 碼分片的完整歷史
+  data/upcoming.json     預告清單（build 日尚未生效的 record；與 index 同進退）
   data/meta.json         已發布資料批次的統計（資料有變才更新）
   data/status.json       每次成功檢查都更新（前端過期警示依據）
 
@@ -51,6 +52,10 @@ class GuardConfig:
     max_disappeared_pct: int = 1      # 語意 guard，可人工放行
     shard_warn_gzip_bytes: int = 2_000_000
     shard_fail_gzip_bytes: int = 5_000_000
+    # 預告清單：兩條皆為 WARNING。列數 0 可能為真（健保公告有空窗期），
+    # 佔比過高與體積暴增則多半是來源結構異常（spec-upcoming §3.4、§3.5）
+    upcoming_code_pct_warn: int = 5
+    upcoming_raw_warn_bytes: int = 500_000
 
 
 class BuildError(Exception):
@@ -70,13 +75,24 @@ def gzip_size(data):
 
 # ── 建構 ────────────────────────────────────────────────────────
 def build_outputs(rows, build_date):
-    """來源列 → (shards, index_drugs, stats)。純計算，不做 I/O。"""
+    """來源列 → (shards, index_drugs, upcoming_items, stats)。純計算，不做 I/O。"""
     by_code, stats = history.normalize_rows(rows)
-    shards, index_drugs = {}, []
+    shards, index_drugs, code_flags = {}, [], []
     for code in sorted(by_code):
-        shard_entry, index_entry, _ = history.build_code(code, by_code[code], build_date)
+        shard_entry, index_entry, flags = history.build_code(code, by_code[code], build_date)
         shards.setdefault(code[:PREFIX_LENGTH], {})[code] = shard_entry
         index_drugs.append(index_entry)
+        code_flags.append((code, flags))
+
+    # 預告清單另一趟走完：生成失敗要能明確歸因，並轉成 guard 失敗（全有全無，
+    # 整批不發布），不可讓例外逃出去變成沒有訊息的 crash（spec-upcoming §3.4）
+    try:
+        upcoming_items = []
+        for code, flags in code_flags:   # 代號升冪、代號內依 records 順序：sort 第四鍵靠此
+            upcoming_items += history.build_upcoming(code, by_code[code], build_date, flags)
+        upcoming_items = history.sort_upcoming(upcoming_items)
+    except Exception as e:
+        raise BuildError([f"upcoming.json 產生失敗：{e!r}"], []) from e
 
     records = [r for e in by_code.values() for r in e["records"]]
     stats["uniqueDrugCodeCount"] = len(by_code)
@@ -93,7 +109,9 @@ def build_outputs(rows, build_date):
         for e in by_code.values())
     stats["openEndedRowAnomalies"] = sum(
         1 for e in by_code.values() if sum(1 for r in e["records"] if r["to"] is None) != 1)
-    return shards, index_drugs, stats
+    stats["upcomingRows"] = len(upcoming_items)
+    stats["upcomingCodes"] = len({it["code"] for it in upcoming_items})
+    return shards, index_drugs, upcoming_items, stats
 
 
 def sha256(data):
@@ -125,7 +143,20 @@ def pct_exceeds(part, whole, max_pct):
     return whole > 0 and part * 10_000 > whole * max_pct * 100
 
 
-def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly):
+def upcoming_payload(upcoming_items, version, build_date):
+    """spec-upcoming §3.1 的輸出物件；`dataVersion` 沿用來源版本，不另計。"""
+    return {
+        "dataVersion": version,
+        "generatorVersion": history.UPCOMING_GENERATOR_VERSION,
+        "buildDate": build_date.isoformat(),
+        "count": len(upcoming_items),
+        "codeCount": len({it["code"] for it in upcoming_items}),
+        "items": upcoming_items,
+    }
+
+
+def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
+                 upcoming_errors=(), upcoming_bytes=b""):
     """→ (errors, warnings, anomalies_overridden)。errors 非空即不得發布。"""
     errors, warnings, overridden = [], [], []
     rows = stats["sourceRowCount"]
@@ -165,6 +196,18 @@ def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allo
             errors.append(f"{path} gzip {size:,} bytes > {cfg.shard_fail_gzip_bytes:,}")
         elif size > cfg.shard_warn_gzip_bytes:
             warnings.append(f"{path} gzip {size:,} bytes > {cfg.shard_warn_gzip_bytes:,}")
+
+    # 預告清單：驗證失敗一律 error（全有全無，整批不發布）；統計異常只 WARNING
+    errors.extend(f"upcoming.json 驗證失敗：{m}" for m in upcoming_errors)
+    if stats.get("upcomingRows") == 0:
+        warnings.append("upcoming.json 無任何未生效紀錄（可能為真，健保公告有空窗期）")
+    if pct_exceeds(stats.get("upcomingCodes", 0), stats["uniqueDrugCodeCount"],
+                   cfg.upcoming_code_pct_warn):
+        warnings.append(f"有未生效紀錄的代號 {stats.get('upcomingCodes', 0):,} 個，"
+                        f"超過全部代號的 {cfg.upcoming_code_pct_warn}%")
+    if len(upcoming_bytes) > cfg.upcoming_raw_warn_bytes:
+        warnings.append(f"upcoming.json raw {len(upcoming_bytes):,} bytes > "
+                        f"{cfg.upcoming_raw_warn_bytes:,}（來源結構可能異常）")
 
     if stats.get("startSentinelRows"):
         warnings.append(f"有 {stats['startSentinelRows']} 列的有效起日為 9991231")
@@ -216,8 +259,13 @@ def atomic_write(path, data):
     os.replace(tmp, path)
 
 
-def publish(data_dir, files, existing, meta_bytes, status_bytes):
-    """寫入資料檔（有差異時）與 status.json。只在所有 guard 通過後呼叫。"""
+def publish(data_dir, files, existing, meta_bytes, status_bytes, upcoming_bytes=None):
+    """寫入資料檔（有差異時）與 status.json。只在所有 guard 通過後呼叫。
+
+    `upcoming.json` 與 `drug_index.json` 完全同進退（spec-upcoming §3.3）：只在
+    有差異批次寫入。它的 `buildDate` 每週都會前進，若讓它自己決定要不要寫，
+    來源沒變也會每週產生一次無意義的 diff。
+    """
     root = Path(data_dir)
     if meta_bytes is not None:
         for rel, data in files.items():
@@ -225,6 +273,8 @@ def publish(data_dir, files, existing, meta_bytes, status_bytes):
                 atomic_write(root / rel, data)
         for rel in set(existing) - set(files):
             (root / rel).unlink()
+        if upcoming_bytes is not None:
+            atomic_write(root / "upcoming.json", upcoming_bytes)
         atomic_write(root / "meta.json", meta_bytes)
     atomic_write(root / "status.json", status_bytes)
 
@@ -241,10 +291,13 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
         cfg=GuardConfig(), allow_anomaly=False, fixtures_dir="tests/fixtures"):
     """完整 build；guard 失敗 raise BuildError（此時未寫入任何檔案）。回傳結果摘要 dict。"""
     rows = nhi.parse_csv(raw)
-    shards, index_drugs, stats = build_outputs(rows, build_date)
+    shards, index_drugs, upcoming_items, stats = build_outputs(rows, build_date)
     versions = shard_versions(shards)
     version = data_version(versions)
     files = render(shards, index_drugs, versions, version)
+    upcoming = upcoming_payload(upcoming_items, version, build_date)
+    upcoming_errors = history.validate_upcoming(upcoming)
+    upcoming_bytes = dumps(upcoming)
 
     prev_meta = read_json(Path(data_dir) / "meta.json")
     prev_index = read_json(Path(data_dir) / "drug_index.json")
@@ -253,13 +306,22 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
     shard_files = {k: v for k, v in files.items() if k.startswith("history/")}
 
     errors, warnings, overridden = check_guards(
-        stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly)
+        stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
+        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes)
     warnings += golden_rewrites(shards, fixtures_dir)
     if errors:
         raise BuildError(errors, warnings)
 
     existing = existing_data_files(data_dir)
     changed = existing != files
+    # 首次交付與生成規則遷移（spec-upcoming §3.3.1）：判定對象是已發布版本。
+    # 必須強制進入有差異批次，否則新產物只會留在工作目錄裡進不了 commit，
+    # 功能上線即空。失敗時不寫任何檔案，下次執行仍會重新判定為未完成。
+    prev_upcoming = read_json(Path(data_dir) / "upcoming.json")
+    migration = (not isinstance(prev_upcoming, dict)
+                 or prev_upcoming.get("generatorVersion") != history.UPCOMING_GENERATOR_VERSION)
+    if migration:
+        changed = True
     meta_bytes = None
     if changed:
         meta_bytes = dumps({
@@ -273,7 +335,8 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
                 "blankCodeRows", "malformedPriceRows", "missingPriceRows",
                 "duplicateRowsRemoved", "conflictingIntervals", "conflictCodes",
                 "overlapCodes", "gapCodes", "questionMarkCodes",
-                "inconsistentMetadataCodes", "openEndedRowAnomalies")},
+                "inconsistentMetadataCodes", "openEndedRowAnomalies",
+                "upcomingRows", "upcomingCodes")},
             "coverageStart": stats["coverageStart"],
             "coverageEnd": stats["coverageEnd"],
         })
@@ -283,10 +346,11 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
         "dataVersion": version,
         "sourceModifiedAt": source_modified,
     })
-    publish(data_dir, files, existing, meta_bytes, status_bytes)
+    publish(data_dir, files, existing, meta_bytes, status_bytes, upcoming_bytes)
     return {"changed": changed, "dataVersion": version, "stats": stats,
-            "warnings": warnings, "overridden": overridden,
-            "sizes": {k: (len(v), gzip_size(v)) for k, v in files.items()}}
+            "warnings": warnings, "overridden": overridden, "upcomingMigration": migration,
+            "sizes": {k: (len(v), gzip_size(v))
+                      for k, v in {**files, "upcoming.json": upcoming_bytes}.items()}}
 
 
 def parse_args(argv):
@@ -348,7 +412,9 @@ def main(argv=None, cfg=GuardConfig()):
     step_summary(
         [f"## ✓ 建置完成（資料{'有變動' if result['changed'] else '無變動'}）",
          f"- 來源列數 {s['sourceRowCount']:,}；代號 {s['uniqueDrugCodeCount']:,}；"
-         f"invalidRecords {s.get('invalidRecords', 0)}；malformed {s.get('malformedPriceRows', 0)}"]
+         f"invalidRecords {s.get('invalidRecords', 0)}；malformed {s.get('malformedPriceRows', 0)}",
+         f"- 預告 {s.get('upcomingRows', 0):,} 列 / {s.get('upcomingCodes', 0):,} 個代號"
+         f"{'（首次交付或規則遷移，強制重產）' if result['upcomingMigration'] else ''}"]
         + [f"- ⚠ {m}" for m in result["warnings"]])
     return 0
 

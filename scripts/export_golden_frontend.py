@@ -26,7 +26,7 @@ OUT = ROOT / "tests" / "fixtures" / f"golden_frontend_{SNAPSHOT_DATE}.json"
 
 def render():
     rows = parse_csv((ROOT / SNAPSHOT_FILE).read_bytes())
-    shards, index_drugs, _ = build_outputs(rows, date.fromisoformat(SNAPSHOT_DATE))
+    shards, index_drugs, _, _ = build_outputs(rows, date.fromisoformat(SNAPSHOT_DATE))
     return dumps({
         "buildDate": SNAPSHOT_DATE,
         "shards": {code: entry for shard in shards.values() for code, entry in shard.items()},

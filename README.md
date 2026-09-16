@@ -5,6 +5,7 @@
 > 本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。
 
 - 規格（資料模型與規則）：[`spec.md`](spec.md)
+- 功能規格：[`spec-upcoming.md`](spec-upcoming.md)（預告中心）、[`spec-compare.md`](spec-compare.md)（多代號比較）
 - 驗收條件（A1–E7）：[`.ai-review/plan.md`](.ai-review/plan.md)
 - 資料來源：健保署「健保用藥品項查詢項目檔」（`A21030000I-E41001-001`），每週檢查、官方月更
 
@@ -16,6 +17,7 @@
   - C2 截圖藥師目檢通過；E7 兩項未達目標，MVP 接受現況（2026-09-12）
 - [x] 上線：https://liangrxdev.github.io/NHI-drug-price-history/
 - [x] Phase 3：`TFDA-drug-info-search` 健保代號表新增「健保藥價歷史 → 查看 ↗」欄（2026-09-12，`62de833`，線上端到端驗證通過）
+- [ ] Phase 4 預告中心（`spec-upcoming.md`）：資料層 `data/upcoming.json` 已上線，前端未上線
 
 ## 資料語意（摘要）
 
@@ -28,6 +30,15 @@
 | 其他 | `malformed` | 資料格式異常（顯示原始值） |
 
 有效迄日 `9991231` 為開放迄日。現行支付價由前端依瀏覽器日期判定；詳細頁由完整 history 推導。
+
+### `data/upcoming.json`（預告清單）
+
+build 日 `D` 當下**尚未生效**（`from > D`）的全部紀錄，一列一筆，不合併同代號的多筆預告。
+
+- 描述欄位（品名／成分／規格／劑型／ATC／藥商）取自 `D` 當日有效列，不取預告列本身；只有未來列的代號一律為 `null`
+- `previousPrice` 是事件語意（終止／暫停續期依 `spec.md` §5.4 為 `null`），`pricedBefore` 是狀態語意（該列之前最後一個有價金額），兩者並存不可互相取代
+- **「資料產生日」（`buildDate`）與「最後檢查日」（`status.json`）是兩個不同的日期**，相差數週屬正常：`buildDate` 只在來源有變、build 日跨過預告生效日、或生成規則遷移時才前進
+- 與 `drug_index.json` 完全同進退；產生或驗證失敗 → exit 1，整批不發布
 
 ## 建置
 
