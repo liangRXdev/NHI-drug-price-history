@@ -161,3 +161,40 @@ test('§6 任一 shard 載入中 → 骨架，不得先畫已到的序列', asyn
   await expect(chart(page)).toBeVisible();
   await expect(page.locator('.cmp-skeleton')).toHaveCount(0);
 });
+
+// ── M10：相對變化模式的指數值（§4.1）─────────────────────────────
+test('M10 指數值以各自基準計算，基準點恆為 100.0', async ({ page }) => {
+  await open(page, 'AC48867100,A020296321');
+  await page.getByRole('button', { name: '相對變化' }).click();
+
+  const idx = (code) => page.locator(`.cmp-line[data-code="${code}"][data-index]`)
+    .evaluateAll((els) => els.map((el) => el.dataset.index));
+  const ac = await idx('AC48867100');
+  expect(ac[0]).toBe('100.0');                     // 基準列本身
+  expect(ac.at(-1)).toBe('38.7');                  // 12.50 ÷ 32.30
+  const a0 = await idx('A020296321');
+  expect(a0[0]).toBe('100.0');                     // 1998-03-01 起 34.00
+  expect(a0.at(-1)).toBe('60.3');                  // 20.50 ÷ 34.00
+  // Y 軸不得標成價格或貨幣單位
+  await expect(page.locator('.cmp-chart .y-unit')).toHaveText('指數（各自基準＝100）');
+  await expect(page.locator('.cmp-chart .y-unit')).not.toContainText('元');
+});
+
+test('M10 絕對金額模式標示為元，且線帶原始價格', async ({ page }) => {
+  await open(page, 'AC48867100,A020296321');
+  await expect(page.locator('.cmp-chart .y-unit')).toHaveText('元');
+  const prices = await page.locator('.cmp-line[data-code="AC48867100"][data-price]')
+    .evaluateAll((els) => els.map((el) => el.dataset.price));
+  expect(prices[0]).toBe('32.30');
+  expect(prices.at(-1)).toBe('12.50');
+});
+
+test('M10 停止後恢復支付的區間也以同一基準計算', async ({ page }) => {
+  await open(page, 'AC48867100,A020296321');
+  await page.getByRole('button', { name: '相對變化' }).click();
+  const idx = await page.locator('.cmp-line[data-code="AC48867100"][data-index]')
+    .evaluateAll((els) => els.map((el) => el.dataset.index));
+  // 2017-12-01 恢復支付 22.90 ÷ 32.30 = 70.9；終止期間不產生線段
+  expect(idx).toContain('70.9');
+  expect(idx.filter((v) => v === '0.0')).toHaveLength(0);
+});

@@ -1319,7 +1319,8 @@ function compareChartHTML(m) {
       parts.push(`<g class="grid"><line x1="${CM.l}" x2="${W - CM.r}" y1="${f(y(v))}" y2="${f(y(v))}"/></g>
         <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(state.compareMode === 'rel' ? v.toFixed(0) : E.fmtMoney(v))}</text>`);
     }
-    parts.push(`<text x="${CM.l - 6}" y="${CM.t - 5}" text-anchor="end">${state.compareMode === 'rel' ? '指數' : '元'}</text>`);
+    // 相對模式的 Y 軸不得標成「價格」或任何貨幣單位（§4.1）
+    parts.push(`<text class="y-unit" x="${CM.l - 6}" y="${CM.t - 5}" text-anchor="end">${state.compareMode === 'rel' ? '指數（各自基準＝100）' : '元'}</text>`);
   }
 
   // X 軸年份
@@ -1353,11 +1354,14 @@ function compareChartHTML(m) {
       const gx1 = x(Math.min(E.dayNumber(seg.to) + 1, xMax));
       const gy = y(v);
       const cls = `cmp-line s${s.slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
+      const val = state.compareMode === 'rel'
+        ? ` data-index="${E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)}"`
+        : ` data-price="${seg.rawPrice}"`;
       // 相鄰且價格不同才連垂直線；空窗與非有價區間之後 prev 已清空
       if (prev && prev.nextX === gx0 && prev.y !== gy) {
         parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx0)}" y1="${f(prev.y)}" y2="${f(gy)}"/>`);
       }
-      parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx1)}" y1="${f(gy)}" y2="${f(gy)}"/>`);
+      parts.push(`<line class="${cls}" data-code="${esc(s.code)}"${val} x1="${f(gx0)}" x2="${f(gx1)}" y1="${f(gy)}" y2="${f(gy)}"/>`);
       prev = { nextX: gx1, y: gy, contiguous: seg.record.to !== null };
       if (MARKER_TYPES.has(seg.record.eventType) && !seg.clippedLeft) {
         parts.push(markerPath(s.slot, gx0, gy, seg, s.code, s.records.indexOf(seg.record)));
