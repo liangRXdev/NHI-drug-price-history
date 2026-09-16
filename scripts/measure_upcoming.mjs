@@ -44,6 +44,8 @@ const browser = await chromium.launch();
 const runs = [];
 for (let i = 0; i < RUNS; i += 1) {
   const ctx = await browser.newContext({ locale: 'zh-TW', timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
+  // NOFONTS=1：對照實驗，排除 Google Fonts 對 frame 排程的影響
+  if (process.env.NOFONTS) await ctx.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
   const page = await ctx.newPage();
   const cdp = await ctx.newCDPSession(page);
   await cdp.send('Network.enable');
@@ -59,24 +61,39 @@ for (let i = 0; i < RUNS; i += 1) {
 
   await page.locator('#upcomingBadge').click();
   await page.waitForFunction((n) => document.querySelectorAll('.upcoming-row').length === n, payload.count, { timeout: 60_000 });
-  const fetchToRendered = await page.evaluate(() =>
-    performance.getEntriesByName('upcoming-fetch-to-rendered').pop()?.duration ?? -1);
+  // 秒表在 paint 之後才收（app.js 的 afterPaint），因此等它出現再讀
+  await page.waitForFunction(() => performance.getEntriesByName('upcoming-fetch-to-rendered').length > 0,
+    null, { timeout: 30_000 });
+  await page.waitForFunction(() => performance.getEntriesByName('upcoming-fetch-to-painted').length > 0,
+    null, { timeout: 30_000 });
+  const [fetchToRendered, fetchToDom, fetchToPainted] = await page.evaluate(() => [
+    performance.getEntriesByName('upcoming-fetch-to-rendered').pop()?.duration ?? -1,
+    performance.getEntriesByName('upcoming-fetch-to-dom').pop()?.duration ?? -1,
+    performance.getEntriesByName('upcoming-fetch-to-painted').pop()?.duration ?? -1,
+  ]);
 
   // 篩選／排序重繪：每個操作各量一次，取最大值（最壞情況）
   const rerender = [];
   for (const [id, value] of [['upType', 'terminated'], ['upSort', 'change_desc'], ['upType', 'all'], ['upSort', 'date_asc']]) {
     rerender.push(await page.evaluate(async ([elId, v]) => {
       performance.clearMeasures('upcoming-rerender');
+      performance.clearMeasures('upcoming-rerender-painted');
       const el = document.getElementById(elId);
       el.value = v;
       el.dispatchEvent(new Event('change'));
-      await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+      // 等到 app.js 在 paint 後記下的 measure 真的出現為止（不是等自己的 rAF）
+      const t0 = performance.now();
+      while (!performance.getEntriesByName('upcoming-rerender-painted').length && performance.now() - t0 < 5000) {
+        await new Promise((ok) => requestAnimationFrame(ok));
+      }
       return Math.round(performance.getEntriesByName('upcoming-rerender').pop()?.duration ?? -1);
     }, [id, value]));
   }
 
   runs.push({
     fetchToRenderedMs: Math.round(fetchToRendered),
+    fetchToDomMs: Math.round(fetchToDom),
+    fetchToPaintedMs: Math.round(fetchToPainted),
     rerenderMaxMs: Math.max(...rerender),
     upcomingRequestsBeforeClick: beforeClick,
     rows: await page.locator('.upcoming-row').count(),
@@ -94,6 +111,8 @@ const out = {
   runs,
   median: {
     fetchToRenderedMs: median(runs.map((r) => r.fetchToRenderedMs)),
+    fetchToDomMs: median(runs.map((r) => r.fetchToDomMs)),
+    fetchToPaintedMs: median(runs.map((r) => r.fetchToPaintedMs)),
     rerenderMaxMs: median(runs.map((r) => r.rerenderMaxMs)),
   },
   targets: { fetchToRenderedMs: 200, rerenderMs: 50, gzipBytes: 20 * 1024, firstScreenUpcomingBytes: 0 },

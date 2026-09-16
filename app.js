@@ -826,11 +826,22 @@ function renderUpcoming() {
         ${g.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('')}
       </section>`).join('')
     : model.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('');
-  // 終點＝版本驗證通過且完整清單已渲染（骨架可捲動不算，§8.1）
-  if (performance.getEntriesByName('upcoming-fetch-start').length) {
+  // 終點＝版本驗證通過且**完整清單已渲染可捲動**（骨架可捲動不算，§8.1）。
+  // DOM 寫入完成還不算：讀 offsetHeight 強制瀏覽器做完 layout，此刻清單才真的可捲動。
+  // 另記一個 paint 後的參考值，但它受 frame 排程影響，不作為達標依據
+  const startMark = performance.getEntriesByName('upcoming-fetch-start')[0];
+  if (startMark) {
+    performance.measure('upcoming-fetch-to-dom', 'upcoming-fetch-start');   // 參考值：DOM 寫入完成
+    void list.offsetHeight;                                                 // 強制 layout
     performance.measure('upcoming-fetch-to-rendered', 'upcoming-fetch-start');
     performance.clearMarks('upcoming-fetch-start');
+    afterPaint(() => performance.measure('upcoming-fetch-to-painted', { start: startMark.startTime }));
   }
+}
+
+/** 下一次 paint 之後執行：rAF 的回呼跑在 layout／paint 之前，故要兩層。 */
+function afterPaint(fn) {
+  requestAnimationFrame(() => requestAnimationFrame(fn));
 }
 
 const UPCOMING_CONTROLS = { upType: 'type', upAtc: 'atc', upDate: 'date', upQ: 'q', upSort: 'sort' };
@@ -865,7 +876,9 @@ function onUpcomingControl() {
   const t0 = performance.now();
   writeUpcomingURL();
   renderUpcoming();
+  void $('upcomingList').offsetHeight;          // 同上：量到 layout 完成為止
   performance.measure('upcoming-rerender', { start: t0 });
+  afterPaint(() => performance.measure('upcoming-rerender-painted', { start: t0 }));
 }
 
 let upcomingFrame = 0;
