@@ -59,6 +59,9 @@
 
 - [ ] **臨床藥師目檢**：一次完整清單（82 列）＋ §9.1 指名的合成反例，確認 (1) 無 §4 禁止用語、
       (2) 無「終止／0 元」標籤誤用（特別是 `everPriced = false` 的合成案例）、(3) 實際呈現列數等於預期集合。
-      合成反例畫面可用 `e2e/upcoming-filters.spec.mjs` 的 `ITEMS` 資料重現。
+      執行 `node scripts/upcoming_review.mjs` 後兩個畫面並行：
+      **http://127.0.0.1:8766/?view=upcoming** 為真實清單（82 列），
+      **http://127.0.0.1:8767/?view=upcoming** 為合成反例（§4.1 的 14 個序號，18 列，品名即標明它要驗的規則）。
+      合成清單在送出前會先過 `validateUpcoming()`，不會拿一份自己就不合法的資料目檢。
 - [ ] 上線後手動 dispatch 一次 `Build Price History Data`，確認例行路徑在真實環境仍維持
       `upcoming.json` 與 `drug_index.json` 同進退（本機測試已涵蓋，但排程管線沒跑過就是沒驗過）。

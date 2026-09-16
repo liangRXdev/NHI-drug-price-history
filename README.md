@@ -74,6 +74,7 @@ npx playwright install chromium                    # 首次
 npm run e2e                                        # DOM／viewport／競態（route mock）
 node scripts/measure_e7.mjs                        # E7 效能量測 + C2 截圖（非 CI）
 node scripts/measure_upcoming.mjs                  # U14 預告中心效能量測（非 CI）
+node scripts/upcoming_review.mjs                   # 預告中心藥師目檢：8766 真實清單、8767 合成反例
 node scripts/smoke_live.mjs                        # 部署後線上 smoke check（deep link、搜尋、資料版本、SW）
 uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 JS 用 golden fixture
 ```
