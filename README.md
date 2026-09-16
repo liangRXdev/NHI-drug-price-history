@@ -17,6 +17,7 @@
   - C2 截圖藥師目檢通過；E7 兩項未達目標，MVP 接受現況（2026-09-12）
 - [x] 上線：https://liangrxdev.github.io/NHI-drug-price-history/
 - [x] Phase 3：`TFDA-drug-info-search` 健保代號表新增「健保藥價歷史 → 查看 ↗」欄（2026-09-12，`62de833`，線上端到端驗證通過）
+- [ ] Phase 5 多代號比較（`spec-compare.md`）：實作中
 - [x] Phase 4 預告中心（`spec-upcoming.md`）：`data/upcoming.json`、`?view=upcoming` 清單、事件標籤、篩選排序分組、CSV 匯出（驗收紀錄：[`.ai-review/upcoming-acceptance.md`](.ai-review/upcoming-acceptance.md)；藥師目檢待執行）
 
 ## 資料語意（摘要）
@@ -75,6 +76,8 @@ npm run e2e                                        # DOM／viewport／競態（r
 node scripts/measure_e7.mjs                        # E7 效能量測 + C2 截圖（非 CI）
 node scripts/measure_upcoming.mjs                  # U14 預告中心效能量測（非 CI）
 node scripts/upcoming_review.mjs                   # 預告中心藥師目檢：8766 真實清單、8767 合成反例
+node scripts/measure_compare.mjs                   # M17 多代號比較效能量測（非 CI）
+node scripts/compare_review.mjs                    # 多代號比較藥師目檢：8768 真實四碼、8769 合成重合情境
 node scripts/smoke_live.mjs                        # 部署後線上 smoke check（deep link、搜尋、資料版本、SW）
 uv run python scripts/export_golden_frontend.py    # ETL 規則變動後重產 JS 用 golden fixture
 ```

@@ -298,7 +298,11 @@ function route() {
   const params = new URLSearchParams(location.search);
   const code = params.get('code');
   if (params.get('view') === 'upcoming') showUpcoming();
-  else if (params.get('codes') !== null) showCompare();
+  else if (params.get('codes') !== null) {
+    // 情境 C（冷開 deep link）：導覽開始即為起點，只記錄不設門檻
+    if (!performance.getEntriesByName('compare-open-start').length) performance.mark('compare-open-start');
+    showCompare();
+  }
   else if (code !== null) showDetail(code.trim().toUpperCase());
   else showSearch();
 }
@@ -1173,6 +1177,11 @@ function compareBannerHTML() {
     <button type="button" data-action="compare-retry">重試</button></div>`;
 }
 
+/**
+ * M17 的終點是「可互動」＝圖表已渲染且 crosshair 可回應，不是 JS 工作完成。
+ * 因此在寫入 DOM 後強制 layout（讀 offsetHeight）才收秒表；crosshair 的實際可回應性
+ * 由量測腳本另行驗證（派送 mousemove 檢查 tooltip）。
+ */
 function renderCompare() {
   if ($('compareView').hidden) return;
   const items = state.compare.items;
@@ -1192,6 +1201,7 @@ function renderCompare() {
   // 選定集合的每一個代號都要被交代，含異常者（§6.1）
   const tables = loading ? '' : `${compareSummaryHTML(model)}${compareTableHTML(model)}<p id="compareRowNote" class="search-status"></p>`;
   if (!loading) state.compareEverRendered = true;
+  const t0 = performance.now();
   $('compareBody').innerHTML = chart + tables + `<ul class="compare-codes">${items.map((x) => {
     const d = state.compareData.get(x.code) || { status: 'loading' };
     const drug = state.byCode?.get(x.code);
@@ -1204,6 +1214,15 @@ function renderCompare() {
       <button type="button" class="link-btn" data-action="tray-remove" data-code="${esc(x.code)}">移除</button>
     </li>`;
   }).join('')}</ul>`;
+
+  if (!loading) {
+    void $('compareBody').offsetHeight;                       // 強制 layout：此刻圖表才真的可互動
+    performance.measure('compare-render', { start: t0 });
+    if (performance.getEntriesByName('compare-open-start').length) {
+      performance.measure('compare-open-to-interactive', 'compare-open-start');
+      performance.clearMarks('compare-open-start');
+    }
+  }
 }
 
 function showCompare() {
@@ -1721,6 +1740,8 @@ function bind() {
       if (!$('compareView').hidden) { history.pushState(null, '', location.pathname); showSearch(); }
     } else if (action === 'tray-start') {
       e.preventDefault();
+      performance.mark('compare-open-start');          // 情境 A 的起點
+
       history.pushState({ fromSearch: true }, '', `?codes=${encodeURIComponent(E.serializeCompareCodes(state.compare.items))}`);
       showCompare();
       window.scrollTo(0, 0);
