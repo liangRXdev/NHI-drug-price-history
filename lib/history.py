@@ -14,6 +14,7 @@
 - §5.5.1 合法性判準      → validate_upcoming()
 """
 
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -461,8 +462,16 @@ def sort_upcoming(items):
     return sorted(items, key=lambda it: (it["effectiveDate"], it["eventType"], it["code"]))
 
 
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _is_iso_date(value):
-    if not isinstance(value, str):
+    """`YYYY-MM-DD` 外形 ＋ 真實日曆日。
+
+    只靠 `date.fromisoformat()` 會連基本格式 `20260911` 都收，前端的正規表示式
+    不收——兩端不等價，跨語言雙 validator 的防線就有洞（verdict-upcoming R4）。
+    """
+    if not isinstance(value, str) or not ISO_DATE_RE.match(value):
         return False
     try:
         date.fromisoformat(value)

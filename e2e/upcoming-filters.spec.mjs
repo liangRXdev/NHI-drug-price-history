@@ -183,21 +183,41 @@ test('U13 分組標題的品項數等於該批次實際呈現列數', async ({ p
 // ── U8 D 與 T 的落差 ────────────────────────────────────────────
 const LABEL = (page, code) => rows(page).filter({ has: page.locator(`.r-code:text-is("${code}")`) });
 
+const ALL_CODES = ITEMS.map((it) => it.code);
+const expiredCodes = (page) => page.locator('.upcoming-row[data-expired] .r-code').allTextContents();
+
+// 完整列集合每次都要對，且每一列的到期狀態都要對：只驗列數或只驗指名的那一列，
+// 「所有列都標已生效」或「只留指名那列」都會綠
 for (const [today, expired] of [
-  ['2026-10-31', false], ['2026-11-01', true], ['2026-11-02', true],
+  ['2026-10-31', ['A000000001', 'B000000002']],
+  ['2026-11-01', ['A000000001', 'B000000002', 'C000000003', 'K000000011', 'D000000004']],
+  ['2026-11-02', ['A000000001', 'B000000002', 'C000000003', 'K000000011', 'D000000004']],
 ]) {
   test(`U8 生效日前一天／當天／後一天 @ ${today}`, async ({ page }) => {
     await open(page, { today });
-    expect(await shownCodes(page)).toHaveLength(10);              // 完整列集合不變
-    const row = LABEL(page, 'C000000003');
-    await expect(row.locator('[data-expired-tag]')).toHaveCount(expired ? 1 : 0);
+    expect(await shownCodes(page)).toEqual(ALL_CODES);             // 完整列集合不變
+    expect((await expiredCodes(page)).map((s) => s.trim())).toEqual(expired);
     // 價格與事件不隨 T 改變
+    const row = LABEL(page, 'C000000003');
     await expect(row.locator('[data-label]')).toHaveText('終止支付');
     await expect(row.locator('[data-sub]')).toHaveText('2026-11-01 起；終止前 245.00 元');
-    // 未到期的列不得被標成已生效
-    await expect(LABEL(page, 'H000000008').locator('[data-expired-tag]')).toHaveCount(0);
   });
 }
+
+test('U15 只有未來列的代號：描述欄位在畫面上顯示「—」', async ({ page }) => {
+  const bare = upcomingItem({
+    code: 'N000000001', chName: null, enName: null, ingredient: null, strength: null,
+    strengthUnit: null, dosageForm: null, atcCode: null, manufacturer: null,
+    effectiveDate: '2026-12-01',
+  });
+  await open(page, { items: [bare] });
+  const row = rows(page).first();
+  await expect(row.locator('.r-name')).toHaveText('—');
+  await expect(row.locator('.r-en')).toHaveText('—');
+  await expect(row.locator('.r-sub')).toHaveCount(0);              // 三個欄位皆空 → 不畫這一行
+  await expect(row.locator('.r-meta')).toContainText('ATC —');
+  await expect(row.locator('[data-label]')).toHaveText('健保支付價 0 元');
+});
 
 test('U8 混合：已到期與未到期同時存在，徽章只算未生效', async ({ page }) => {
   await open(page, { today: '2026-11-15' });

@@ -56,7 +56,7 @@ const json = (route, body, delay = 0) => new Promise((ok) => setTimeout(ok, dela
  *   index/meta   '404'｜'corrupt'｜物件覆寫
  *   indexDelay   index 延遲毫秒
  *   shard        (prefix, attempt, route, data) => 自訂處理；回傳 false 走預設
- *   upcoming     '404'｜'corrupt'｜'pending'｜'network'｜HTTP 狀態碼｜物件覆寫；給陣列則依請求次數逐一套用
+ *   upcoming     '404'｜'corrupt'｜'pending'｜'network'｜'body-stall'｜HTTP 狀態碼｜物件覆寫；給陣列則依請求次數逐一套用
  *   upcomingDelay  upcoming 延遲毫秒
  */
 export async function mockSite(page, opts = {}) {
@@ -88,6 +88,8 @@ export async function mockSite(page, opts = {}) {
         : opts.upcoming;
       if (v === 'pending') return new Promise(() => {});
       if (v === 'network') return route.abort('failed');
+      // headers 已到、body 收不完：交給 e2e/server.mjs 的 /__stall_body（fulfill 無法模擬）
+      if (v === 'body-stall') return route.continue({ url: new URL('/__stall_body', route.request().url()).href });
       if (typeof v === 'number') return route.fulfill({ status: v, body: 'server error' });
       return special(v) ?? json(route, typeof v === 'object' && v !== null ? v : data.upcoming,
         opts.upcomingDelay || 0);

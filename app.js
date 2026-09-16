@@ -25,10 +25,12 @@ const state = {
   detailSeq: 0,
   current: null,              // 目前詳細頁 { code, entry }
   newestFirst: true,
-  // 預告中心：payload 為最後一份通過驗證的快照，更新失敗時沿用（spec-upcoming §5.5）
-  upcoming: { phase: 'idle', payload: null, error: null, reason: null, updateFailed: null },
+  // 預告中心（spec-upcoming §5.5）：snapshot 是最後一份**通過驗證**的快照，連同當時的
+  // 最後檢查日一起保存；updateFailed 只有在新資料驗證成功時才解除——請求進行中解除，
+  // 會讓畫面與 CSV 在更新尚未成功時看起來像最新資料
+  upcoming: { phase: 'idle', snapshot: null, error: null, reason: null, updateFailed: null, refreshing: false },
   upcomingSeq: 0,
-  upcomingInflight: false,
+  upcomingInflight: 0,
 };
 
 // 逾時（毫秒）：請求卡住時必須在有限時間內轉為錯誤狀態，不可無限顯示「載入中」（codex R7）。
@@ -53,7 +55,10 @@ async function fetchJSON(url, timeoutMs) {
     try {
       return await res.json();
     } catch {
-      throw new LoadError('invalid', ctrl.signal.aborted ? '連線逾時' : '內容不是有效的 JSON');
+      // headers 已到、body 還沒收完時逾時，仍是網路類失敗：歸成 invalid 會讓呼叫端
+      // 誤判「來源已壞」而清掉還能用的舊快照（spec-upcoming §5.5）
+      if (ctrl.signal.aborted) throw new LoadError('network', '連線逾時');
+      throw new LoadError('invalid', '內容不是有效的 JSON');
     }
   } finally {
     clearTimeout(timer);
@@ -285,6 +290,7 @@ function route() {
 
 function showSearch() {
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
+  state.upcomingSeq++;                 // 同時使在途的預告請求失效，其回應一律丟棄
   state.current = null;
   $('detailView').hidden = true;
   $('upcomingView').hidden = true;
@@ -302,6 +308,7 @@ function navigate(code) {
 // ── 詳細頁 ──────────────────────────────────────────────────────
 async function showDetail(code) {
   const seq = ++state.detailSeq;
+  state.upcomingSeq++;                 // 同上：離開預告頁即丟棄其在途回應
   state.current = null;
   $('searchView').hidden = true;
   $('upcomingView').hidden = true;
@@ -663,9 +670,9 @@ function renderTable(entry, T) {
 // 「已生效」提示以 T 對 effectiveDate 判定，獨立於過期警示（以最後檢查日判定）：
 // 最後檢查日很新時不得因此壓掉到期提示。
 function upcomingBadgeText() {
-  const u = state.upcoming;
-  if (u.phase !== 'ready') return '預告';
-  return `預告 ${E.upcomingPendingCount(u.payload.items, state.today).toLocaleString('zh-TW')}`;
+  const snap = state.upcoming.snapshot;
+  if (!snap) return '預告';
+  return `預告 ${E.upcomingPendingCount(snap.payload.items, state.today).toLocaleString('zh-TW')}`;
 }
 
 function renderUpcomingBadge() {
@@ -679,32 +686,50 @@ async function loadUpcoming({ force = false } = {}) {
     renderUpcoming();
     return;
   }
-  if (state.upcomingInflight) return;
+  // 只有「當代」的在途請求才擋住新請求：離開預告頁時 upcomingSeq 已遞增，
+  // 此時舊請求即使還在途，重新進入也必須能建立新一代請求，否則畫面會卡在骨架
+  if (state.upcomingInflight && state.upcomingInflight === state.upcomingSeq) return;
   if (!force && u.phase === 'ready') return;
   const seq = ++state.upcomingSeq;
-  state.upcomingInflight = true;
+  state.upcomingInflight = seq;
   performance.mark('upcoming-fetch-start');          // U14 量測起點：點擊徽章那一刻
-  state.upcoming = { ...u, phase: u.payload ? u.phase : 'loading', error: null, reason: null, updateFailed: null };
+  // 請求進行中：快照與「更新失敗」標示原封不動，只標記 refreshing
+  state.upcoming = { ...u, phase: u.snapshot ? 'ready' : 'loading', refreshing: true, error: null, reason: null };
   renderUpcoming();
 
+  const fail = (err, reason) => ({ phase: 'error', snapshot: null, error: err, reason, updateFailed: null, refreshing: false });
   let next;
   try {
     const payload = await fetchJSON('data/upcoming.json', TIMEOUT.upcoming);
     const v = E.validateUpcoming(payload, state.meta);
     if (!state.meta) {
       // meta 不可用 → 無法驗證版本，視同不可用；不得略過版本檢查逕行渲染（§5.5）
-      next = { phase: 'error', payload: null, error: new LoadError('invalid', '無法驗證資料版本'), reason: 'unavailable', updateFailed: null };
-    } else if (v.ok) next = { phase: 'ready', payload, error: null, reason: null, updateFailed: null };
-    else next = { phase: 'error', payload: null, error: null, reason: v.reason, updateFailed: null };
+      next = fail(new LoadError('invalid', '無法驗證資料版本'), 'unavailable');
+    } else if (v.ok) {
+      // 快照帶走當時的最後檢查日：更新失敗時不得配上新的最後檢查日（§5.5）
+      next = {
+        phase: 'ready',
+        snapshot: { payload, checkedAt: state.statusSettled ? (state.status?.lastCheckedAt ?? null) : null },
+        error: null, reason: null, updateFailed: null, refreshing: false,
+      };
+    } else {
+      // §5.5：內容不合法或版本不符須於 console 記錄，供回報時診斷（不輸出整份資料）
+      console.warn(`[NHI] data/upcoming.json 未通過驗證：${v.reason}`);
+      next = { phase: 'error', snapshot: null, error: null, reason: v.reason, updateFailed: null, refreshing: false };
+    }
   } catch (e) {
     const err = e instanceof LoadError ? e : new LoadError('invalid', String(e));
-    // 網路／HTTP／逾時：已有經驗證的快照就保留舊清單，並連同當時的 buildDate 一起標示；
+    // 網路／HTTP／逾時：已有經驗證的快照就保留舊清單，連同當時的 buildDate 與檢查日一起標示；
     // 內容不合法與版本不符則不得保留——新資料證明來源已壞（§5.5）
-    if (err.kind === 'invalid') next = { phase: 'error', payload: null, error: err, reason: 'invalid', updateFailed: null };
-    else if (state.upcoming.payload) next = { phase: 'ready', payload: state.upcoming.payload, error: null, reason: null, updateFailed: err };
-    else next = { phase: 'error', payload: null, error: err, reason: 'unavailable', updateFailed: null };
+    if (err.kind === 'invalid') {
+      console.warn(`[NHI] data/upcoming.json 內容不合法：${err.message}`);
+      next = fail(err, 'invalid');
+    }
+    else if (state.upcoming.snapshot) {
+      next = { ...state.upcoming, phase: 'ready', error: null, reason: null, updateFailed: err, refreshing: false };
+    } else next = fail(err, 'unavailable');
   }
-  state.upcomingInflight = false;
+  if (state.upcomingInflight === seq) state.upcomingInflight = 0;   // 只清掉自己這一代
   if (seq !== state.upcomingSeq) return;          // 已有較新的請求：丟棄本次結果
   state.upcoming = next;
   renderUpcomingBadge();
@@ -718,8 +743,12 @@ const UPCOMING_ERROR_TEXT = {
 };
 
 function upcomingDatesHTML() {
-  const d = state.upcoming.payload?.buildDate;
-  const checked = state.statusSettled ? (state.status?.lastCheckedAt ? twTime(state.status.lastCheckedAt) : '無法取得') : '載入中…';
+  const u = state.upcoming;
+  const d = u.snapshot?.payload.buildDate;
+  // 更新失敗時顯示快照當時的檢查日，不得換成新的（§5.5）
+  const checked = u.updateFailed
+    ? (u.snapshot?.checkedAt ? twTime(u.snapshot.checkedAt) : '無法取得')
+    : (state.statusSettled ? (state.status?.lastCheckedAt ? twTime(state.status.lastCheckedAt) : '無法取得') : '載入中…');
   return `資料產生日 <span class="mono">${d ? esc(d) : '—'}</span>・最後檢查 ${checked}`;
 }
 
@@ -749,21 +778,22 @@ function renderUpcoming() {
     return;
   }
 
+  const payload = u.snapshot.payload;
   const banners = [];
   if (u.updateFailed) {
-    banners.push(`<div class="alert alert--warn">更新失敗（${esc(u.updateFailed.message)}），顯示的是 ${esc(u.payload.buildDate)} 的資料。`
+    banners.push(`<div class="alert alert--warn">更新失敗（${esc(u.updateFailed.message)}），顯示的是 ${esc(payload.buildDate)} 的資料。`
       + '<button type="button" data-action="retry-upcoming">重試</button></div>');
   }
-  if (state.today < u.payload.buildDate) {
-    banners.push(`<div class="alert alert--warn">本站資料產生於 ${esc(u.payload.buildDate)}，晚於你的裝置日期；清單可能未涵蓋該日之後的公告。</div>`);
+  if (state.today < payload.buildDate) {
+    banners.push(`<div class="alert alert--warn">本站資料產生於 ${esc(payload.buildDate)}，晚於你的裝置日期；清單可能未涵蓋該日之後的公告。</div>`);
   }
   $('upcomingBanner').innerHTML = banners.join('');
 
-  const items = u.payload.items;
-  const pending = E.upcomingPendingCount(items, state.today);
+  const items = payload.items;
+  const refreshing = u.refreshing ? '・更新中…' : '';
   if (items.length === 0) {
     $('upcomingControls').hidden = true;
-    status.textContent = '目前資料中無未生效的公告。';
+    status.textContent = `目前資料中無未生效的公告。${refreshing}`;
     list.innerHTML = '';
     return;
   }
@@ -773,28 +803,45 @@ function renderUpcoming() {
 
   if (model.rows.length === 0) {
     // 不得只顯示「查無」：N 為篩選前的總列數，讓使用者知道清單本身有資料
-    status.textContent = `目前篩選條件下沒有符合的公告（清單共 ${model.total} 筆）。`;
+    status.textContent = `目前篩選條件下沒有符合的公告（清單共 ${model.total} 筆）。${refreshing}`;
     list.innerHTML = '';
     return;
   }
-  // 全部已生效時仍列出全部，不得顯示為空白頁（§2）
-  const scope = model.rows.length === model.total
-    ? `共 ${model.total} 筆公告`
-    : `符合篩選條件 ${model.rows.length} 筆（清單共 ${model.total} 筆）`;
-  status.textContent = pending === 0
-    ? `${scope}；目前資料中已無未生效的公告，以下為本站資料產生後已生效、尚未重建的紀錄。`
-    : `${scope}，其中 ${pending} 筆尚未生效。`;
+  // 「其中 N 筆尚未生效」必須對**目前呈現的列**計數：沿用全清單的數字會出現
+  // 「符合篩選條件 1 筆（清單共 82 筆），其中 82 筆尚未生效」這種自相矛盾的句子。
+  // 徽章維持全清單計數（§5.1），兩者語意不同
+  const pending = E.upcomingPendingCount(model.rows.map((r) => r.it), state.today);
+  const filtered = model.rows.length !== model.total;
+  const scope = filtered
+    ? `符合篩選條件 ${model.rows.length} 筆（清單共 ${model.total} 筆）`
+    : `共 ${model.total} 筆公告`;
+  // 未篩選時用 §2 指定的句子；篩選後的「已無未生效」只能宣稱篩選結果，不能宣稱整份資料
+  const noneLeft = filtered ? '其中已無未生效的公告' : '目前資料中已無未生效的公告';
+  status.textContent = (pending === 0
+    ? `${scope}；${noneLeft}，以下為本站資料產生後已生效、尚未重建的紀錄。`
+    : `${scope}，其中 ${pending} 筆尚未生效。`) + refreshing;
   list.innerHTML = model.groups
     ? model.groups.map((g) => `<section class="upcoming-group">
         <h3>${esc(g.date)} 起（${g.rows.length} 品項）</h3>
         ${g.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('')}
       </section>`).join('')
     : model.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('');
-  // 終點＝版本驗證通過且完整清單已渲染（骨架可捲動不算，§8.1）
-  if (performance.getEntriesByName('upcoming-fetch-start').length) {
+  // 終點＝版本驗證通過且**完整清單已渲染可捲動**（骨架可捲動不算，§8.1）。
+  // DOM 寫入完成還不算：讀 offsetHeight 強制瀏覽器做完 layout，此刻清單才真的可捲動。
+  // 另記一個 paint 後的參考值，但它受 frame 排程影響，不作為達標依據
+  const startMark = performance.getEntriesByName('upcoming-fetch-start')[0];
+  if (startMark) {
+    performance.measure('upcoming-fetch-to-dom', 'upcoming-fetch-start');   // 參考值：DOM 寫入完成
+    void list.offsetHeight;                                                 // 強制 layout
     performance.measure('upcoming-fetch-to-rendered', 'upcoming-fetch-start');
     performance.clearMarks('upcoming-fetch-start');
+    afterPaint(() => performance.measure('upcoming-fetch-to-painted', { start: startMark.startTime }));
   }
+}
+
+/** 下一次 paint 之後執行：rAF 的回呼跑在 layout／paint 之前，故要兩層。 */
+function afterPaint(fn) {
+  requestAnimationFrame(() => requestAnimationFrame(fn));
 }
 
 const UPCOMING_CONTROLS = { upType: 'type', upAtc: 'atc', upDate: 'date', upQ: 'q', upSort: 'sort' };
@@ -829,7 +876,9 @@ function onUpcomingControl() {
   const t0 = performance.now();
   writeUpcomingURL();
   renderUpcoming();
+  void $('upcomingList').offsetHeight;          // 同上：量到 layout 完成為止
   performance.measure('upcoming-rerender', { start: t0 });
+  afterPaint(() => performance.measure('upcoming-rerender-painted', { start: t0 }));
 }
 
 let upcomingFrame = 0;
@@ -866,20 +915,21 @@ function upcomingRowHTML(it, dec = E.upcomingDecision(it)) {
 /** §5.4 匯出目前篩選後的結果；資料不可用（版本不符或內容不合法）時一併停用。 */
 function exportUpcomingCSV() {
   const u = state.upcoming;
-  if (u.phase !== 'ready') return;
-  const items = u.payload.items;
+  if (u.phase !== 'ready' || !u.snapshot) return;
+  const payload = u.snapshot.payload;
+  const items = payload.items;
   const params = E.upcomingParams(new URLSearchParams(location.search), items);
   const csv = E.upcomingCSV(E.upcomingModel(items, params).rows, {
-    buildDate: u.payload.buildDate,
+    buildDate: payload.buildDate,
     params,
     today: state.today,
-    // 保留舊快照時匯出沿用舊快照，並於檔頭註明（§5.5）
-    staleNote: u.updateFailed ? `更新失敗，本檔沿用 ${u.payload.buildDate} 的資料` : '',
+    // 保留舊快照時匯出沿用舊快照，並於檔頭註明；請求進行中不得先行解除此註記（§5.5）
+    staleNote: u.updateFailed ? `更新失敗，本檔沿用 ${payload.buildDate} 的資料` : '',
   });
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `nhi_upcoming_${u.payload.buildDate}.csv`;
+  a.download = `nhi_upcoming_${payload.buildDate}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -889,6 +939,7 @@ function exportUpcomingCSV() {
 function showUpcoming() {
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
   state.current = null;
+  state.today = E.localISODate();      // 每次進入取一次 T，該次檢視內不跨午夜更新（§2）
   $('searchView').hidden = true;
   $('detailView').hidden = true;
   $('detail').innerHTML = '';

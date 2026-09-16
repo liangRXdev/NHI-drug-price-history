@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # 預告列上取自 record 的欄位；描述欄位另由 U3 驗（來源是 build 日有效列，不是預告列）
 RECORD_FIELDS = ("effectiveDate", "endDate", "price", "rawPrice", "priceState", "eventType",
-                 "previousPrice", "absoluteChange", "percentChange", "crossesStop")
+                 "previousPrice", "absoluteChange", "percentChange", "crossesStop",
+                 "previousState", "pricedBefore", "everPriced")
 META_FIELDS = history.INDEX_META_FIELDS
 
 
@@ -51,14 +52,21 @@ def test_u1_items_correspond_to_every_future_record_in_history():
     expected = []
     for shard in shards.values():
         for code, entry in shard.items():
-            for rec in entry["records"]:
+            # previousState／pricedBefore／everPriced 由 shard 的 records 自行推導，
+            # 不向待驗的 build_upcoming() 借（U1：預期值不得由待驗生成器產生）
+            last_priced = None
+            for i, rec in enumerate(entry["records"]):
                 if rec["from"] > D.isoformat():
                     expected.append((
                         code, rec["from"], rec["to"], rec["price"], rec["rawPrice"],
                         rec["priceState"], rec["eventType"], rec["previousPrice"],
                         rec["absoluteChange"], rec["percentChange"], rec["crossesStop"],
+                        entry["records"][i - 1]["priceState"] if i else None,
+                        last_priced, last_priced is not None,
                         tuple(sorted(set(rec["flags"]) | set(entry["flags"]))),
                     ))
+                if rec["priceState"] == "priced":
+                    last_priced = rec["price"]
 
     assert expected, "凍結快照必須含未生效列，否則本測試等於沒執行"
     assert Counter(shape(it) for it in items) == Counter(expected)
@@ -290,3 +298,35 @@ def test_validator_rejects(mutate, fragment):
     mutate(payload)
     errors = history.validate_upcoming(payload)
     assert errors and any(fragment in m for m in errors), errors
+
+
+# ── 日期合法性：與 JS validator 共用同一組案例（R4／T1）────────────
+DATE_CASES = json.loads((ROOT / "tests" / "fixtures" / "dates.json").read_text(encoding="utf-8"))
+
+
+def test_date_validator_accepts_only_real_calendar_days():
+    """`YYYY-MM-DD` 外形 ＋ 真實日曆日；基本格式 20260911 不收。
+
+    tests-js/upcoming.test.mjs 以同一份 fixture 驗 JS 端，兩端判定必須一致。
+    """
+    for value in DATE_CASES["legal"]:
+        assert history._is_iso_date(value) is True, value
+    for value in DATE_CASES["illegal"]:
+        assert history._is_iso_date(value) is False, value
+
+
+@pytest.mark.parametrize("value", DATE_CASES["illegal"])
+def test_validator_rejects_illegal_effective_date(value):
+    payload = valid_payload()
+    payload["items"] = payload["items"][:1]
+    payload["count"], payload["codeCount"] = 1, 1
+    payload["items"][0]["effectiveDate"] = value
+    assert any("effectiveDate" in m for m in history.validate_upcoming(payload))
+
+
+@pytest.mark.parametrize("value", DATE_CASES["illegal"])
+def test_validator_rejects_illegal_build_date(value):
+    payload = valid_payload()
+    payload["items"], payload["count"], payload["codeCount"] = [], 0, 0
+    payload["buildDate"] = value
+    assert any("buildDate" in m for m in history.validate_upcoming(payload))

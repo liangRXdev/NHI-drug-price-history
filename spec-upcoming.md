@@ -246,7 +246,7 @@ build 為每週一次，`T` 可能已越過某些 `effectiveDate`。
 | 8 | `priceState = suspended`，`previousState = suspended` | 暫停支付續期 | `YYYY-MM-DD 起仍為暫停；暫停前 X 元` |
 | 9 | `priceState = suspended` | 暫停支付 | `YYYY-MM-DD 起；暫停前 X 元（來源標示「<rawPrice>」）` |
 | 10 | `priceState = priced`，`everPriced = false` | 首次有價 | `YYYY-MM-DD 起 Y 元` |
-| 11 | `priceState = priced`，`previousState ∈ {terminated, suspended}` | 恢復支付 | `YYYY-MM-DD 起 X → Y 元（±Z%，跨越停止期間）` |
+| 11 | `priceState = priced`，`previousState ∈ {terminated, suspended}` | 恢復支付 | `YYYY-MM-DD 起 X → Y 元（±W 元，±Z%，跨越停止期間）` |
 | 12 | `priceState = priced`，`previousState = priced`，`Y = previousPrice` | 續期（支付價不變） | `YYYY-MM-DD 起 Y 元，與前期相同` |
 | 13 | `priceState = priced`，`previousState = priced` | 調升／調降 | `YYYY-MM-DD 起 X → Y 元（±Z%）` |
 | 14 | 以上皆不符 | 無法判定 | 同序 1 |
@@ -560,6 +560,7 @@ v0.1 只寫「缺欄位」，會被實作成寬鬆解析（跳過壞列照樣渲
 | v0.2 | 2026-09-14 | 第一輪覆審後修訂 | `.ai-review/plan-verdict-upcoming.md` |
 | v0.3 | 2026-09-14 | 第二輪覆審後修訂 | `.ai-review/plan-verdict-r2.md` |
 | v0.3.1 | 2026-09-16 | 實作期修正：§5.3 的 `type` 值域與 `other` 集合改以 §4.1.1 為準（原文與 §4.1.1 互相衝突） | 實作 `feat(ui): upcoming filters and grouping` |
+| v0.3.2 | 2026-09-16 | §4.1 序 11 副標補上差額金額（`±W 元`）：原模板只有百分比，與 §4.2「`relisted` 的 `absoluteChange`／`percentChange` 必須呈現」及 U4「序 11 必須顯示差額與百分比」牴觸。序 13 的模板維持只有百分比（詳細頁仍同時呈現兩者） | `.ai-review/verdict-upcoming.md` R9 |
 
 ### v0.2 逐項
 

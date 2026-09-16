@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   upcomingDecision, validateUpcoming, upcomingPendingCount, UPCOMING_GENERATOR_VERSION,
-  upcomingParams, upcomingModel, upcomingCSV, csvField, UPCOMING_CSV_HEADER,
+  upcomingParams, upcomingModel, upcomingCSV, csvField, UPCOMING_CSV_HEADER, isCalendarDate,
 } from '../engine.js';
 
 const front = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_2026-09-11.json', import.meta.url), 'utf8'));
@@ -53,7 +53,7 @@ const CASES = [
   [10, item({ priceState: 'priced', price: 12.5, rawPrice: '12.50', eventType: 'first_priced' }),
     { label: '首次有價', sub: '2026-10-01 起 12.50 元', type: 'first_priced' }],
   [11, item({ priceState: 'priced', price: 22.9, rawPrice: '22.90', eventType: 'relisted', previousState: 'terminated', everPriced: true, pricedBefore: 29.8, previousPrice: 29.8, absoluteChange: -6.9, percentChange: -23.15, crossesStop: true }),
-    { label: '恢復支付', sub: '2026-10-01 起 29.80 → 22.90 元（−23.15%，跨越停止期間）', type: 'relisted' }],
+    { label: '恢復支付', sub: '2026-10-01 起 29.80 → 22.90 元（−6.90 元，−23.15%，跨越停止期間）', type: 'relisted' }],
   [12, item({ priceState: 'priced', price: 94, rawPrice: '94.00', eventType: 'unchanged', previousState: 'priced', everPriced: true, pricedBefore: 94, previousPrice: 94 }),
     { label: '續期（支付價不變）', sub: '2026-10-01 起 94.00 元，與前期相同', type: 'unchanged' }],
   [13, item({ priceState: 'priced', price: 7.9, rawPrice: '7.90', eventType: 'increase', previousState: 'priced', everPriced: true, pricedBefore: 6.9, previousPrice: 6.9, absoluteChange: 1, percentChange: 14.49 }),
@@ -89,7 +89,8 @@ test('U4 續期必須顯示停止前金額；恢復支付必須顯示差額百�
   const sub = (rule) => CASES.find(([r]) => r === rule)[2].sub;
   assert.match(sub(5), /終止前 245\.00 元/);
   assert.match(sub(8), /暫停前 18\.00 元/);
-  assert.match(sub(11), /29\.80 → 22\.90 元（−23\.15%/);
+  // §4.2／U4：差額與百分比兩者都要出現，只有百分比不算數
+  assert.match(sub(11), /29\.80 → 22\.90 元（−6\.90 元，−23\.15%，跨越停止期間）/);
 });
 
 test('U4 序 1／2／3／14 不得顯示為確定的價格事件', () => {
@@ -162,7 +163,7 @@ for (const [name, mutate, reason] of [
   ['endDate 早於 effectiveDate', (p) => { p.items[0].endDate = '2026-09-30'; }, 'invalid'],
   ['count 與 items 不符', (p) => { p.count = 99; }, 'invalid'],
   ['codeCount 與相異代號數不符', (p) => { p.codeCount = 99; }, 'invalid'],
-  ['buildDate 非合法日期', (p) => { p.buildDate = '2026-13-01'; }, 'invalid'],
+  ['buildDate 非合法日期', (p) => { p.buildDate = '2026-13-01'; p.items = []; p.count = 0; p.codeCount = 0; }, 'invalid'],
   ['items 不是陣列', (p) => { p.items = {}; }, 'invalid'],
   ['generatorVersion 不符', (p) => { p.generatorVersion = 'upcoming/0'; }, 'version_mismatch'],
   ['dataVersion 不符', (p) => { p.dataVersion = 'sha256:old'; }, 'version_mismatch'],
@@ -232,20 +233,42 @@ const csvOf = (search = '', today = '2026-09-11') => {
   return { text: upcomingCSV(model.rows, { buildDate: '2026-09-11', params, today }), model, params };
 };
 
-test('U12 檔案結構：BOM、前言一行、標頭一行，資料列與篩選結果逐列對應', () => {
+// U12 要求「逐列逐欄」：完整 16 欄預期矩陣，逐值比對。只比其中幾欄時，
+// 「所有列都重複第一筆」「暫停續期前價全省略」這類弱化實作照樣會綠
+const EXPECTED_CSV = [
+  ['2026-10-01', 'Q000000001', '含,逗號與"引號"的品名', 'LINE1\nLINE2', '', '10 MG', '錠劑',
+    'A01AA01', '測試藥廠', '調升', '10.00', '12.50', '2.50', '25.00', '12.50', ''],
+  ['2026-10-01', 'Q000000002', '零元藥', 'TEST', '', '', '', '', '', '終止支付',
+    '245.00', '', '', '', '0.00', '描述欄位不一致'],
+  ['2026-11-01', 'Q000000003', '暫停藥半形', 'TEST', '', '', '', '', '', '暫停支付',
+    '18.00', '', '', '', '-', ''],
+  ['2026-11-01', 'Q000000004', '暫停藥全形', 'TEST', '', '', '', '', '', '暫停支付續期',
+    '18.00', '', '', '', '－', ''],
+  ['2026-11-01', 'Q000000005', '暫停藥破折號', 'TEST', '', '', '', '', '', '暫停支付續期',
+    '18.00', '', '', '', '—', ''],
+  ['2026-12-01', 'Q000000006', '', '', '', '', '', '', '', '來源無支付價資料',
+    '', '', '', '', '', ''],
+];
+
+test('U12 檔案結構：BOM、前言一行、標頭一行，資料列逐列逐欄對應', () => {
   const { text, model } = csvOf();
   assert.ok(text.startsWith('﻿'), '缺 BOM');
   const rows = parseCSV(text.slice(1));
-  assert.equal(rows.length, model.rows.length + 2);
+  assert.equal(rows.length, model.rows.length + 2);          // 資料列數排除前言與標頭
   assert.match(rows[0][0], /^健保藥價歷史查詢 — 預告清單匯出。/);
   assert.equal(rows[0].length, 1);
   assert.deepEqual(rows[1], UPCOMING_CSV_HEADER);
+  assert.deepEqual(rows.slice(2), EXPECTED_CSV);             // 順序、重數與每一欄的值
+  assert.deepEqual(rows.slice(2).map((r) => r[1]), model.rows.map((r) => r.it.code));
+});
 
-  const data = rows.slice(2);
-  assert.deepEqual(data.map((r) => r[1]), model.rows.map((r) => r.it.code));      // 順序與重數
-  assert.deepEqual(data.map((r) => r[0]), model.rows.map((r) => r.it.effectiveDate));
-  assert.deepEqual(data.map((r) => r[9]), model.rows.map((r) => r.dec.label));
-  assert.deepEqual(data.map((r) => r[14]), model.rows.map((r) => r.it.rawPrice));
+test('U12 排序後匯出，列序與畫面一致', () => {
+  const { text } = csvOf('?sort=date_desc');
+  const data = parseCSV(text.slice(1)).slice(2);
+  assert.deepEqual(data.map((r) => r[1]),
+    ['Q000000006', 'Q000000003', 'Q000000004', 'Q000000005', 'Q000000001', 'Q000000002']);
+  assert.deepEqual(data.find((r) => r[1] === 'Q000000004'),
+    EXPECTED_CSV.find((r) => r[1] === 'Q000000004'));       // 換序不得改變欄位內容
 });
 
 test('U12 原始支付價字串逐字保真（12.50 不變 12.5、0.00 不變 0、三種暫停標記）', () => {
@@ -295,4 +318,31 @@ test('csvField 只在必要時加引號', () => {
   assert.equal(csvField('a,b'), '"a,b"');
   assert.equal(csvField('a"b'), '"a""b"');
   assert.equal(csvField('a\r\nb'), '"a\r\nb"');
+});
+
+// ── 日期合法性：與 Python validator 共用同一組案例（R4／T1）────────
+const DATE_CASES = JSON.parse(readFileSync(new URL('../tests/fixtures/dates.json', import.meta.url), 'utf8'));
+
+test('R4 日期驗證只接受真實日曆日，與 Python 端同判定', () => {
+  for (const v of DATE_CASES.legal) assert.equal(isCalendarDate(v), true, v);
+  for (const v of DATE_CASES.illegal) assert.equal(isCalendarDate(v), false, v);
+});
+
+for (const v of DATE_CASES.illegal) {
+  test(`T1 拒絕非法 effectiveDate：${JSON.stringify(v)}`, () => {
+    // 生效日改成非法值，但 buildDate 維持 2026-09-11：若只比字串大小，
+    // '2027-02-30' > '2026-09-11' 會通過——必須是日曆驗證擋下來的
+    const p = payload({}, (x) => { x.items[0].effectiveDate = v; });
+    assert.deepEqual(validateUpcoming(p, META), { ok: false, reason: 'invalid' });
+  });
+
+  test(`T1 拒絕非法 buildDate：${JSON.stringify(v)}`, () => {
+    const p = payload({ items: [] }, (x) => { x.buildDate = v; });
+    assert.deepEqual(validateUpcoming(p, META), { ok: false, reason: 'invalid' });
+  });
+}
+
+test('T1 反向哨兵：合法但晚於 buildDate 的日期仍須通過', () => {
+  const p = payload({}, (x) => { x.items[0].effectiveDate = '2028-02-29'; });
+  assert.deepEqual(validateUpcoming(p, META), { ok: true });
 });

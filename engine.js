@@ -584,6 +584,17 @@ export const UPCOMING_META_FIELDS = ['chName', 'enName', 'ingredient', 'strength
 const UPCOMING_NULLABLE = ['endDate', 'price', 'previousPrice', 'pricedBefore',
   'previousState', 'absoluteChange', 'percentChange'];
 
+/**
+ * 真實日曆日（不只是外形）。`ISO_DATE` 只驗 `YYYY-MM-DD` 的樣子，`2027-02-30`
+ * 照樣通過；Python 端用 `date.fromisoformat()` 會拒絕，兩端不等價等於防線有洞。
+ */
+export function isCalendarDate(v) {
+  if (typeof v !== 'string' || !ISO_DATE.test(v)) return false;
+  const [y, m, d] = v.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 function validUpcomingRow(it, buildDate) {
   if (!isObj(it)) return false;
   if (typeof it.code !== 'string' || it.code === '') return false;
@@ -605,8 +616,8 @@ function validUpcomingRow(it, buildDate) {
   for (const k of ['previousPrice', 'pricedBefore', 'absoluteChange', 'percentChange']) {
     if (it[k] !== null && typeof it[k] !== 'number') return false;
   }
-  if (!ISO_DATE.test(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
-  if (it.endDate !== null && (!ISO_DATE.test(it.endDate) || it.endDate < it.effectiveDate)) return false;
+  if (!isCalendarDate(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
+  if (it.endDate !== null && (!isCalendarDate(it.endDate) || it.endDate < it.effectiveDate)) return false;
   return true;
 }
 
@@ -616,7 +627,7 @@ function validUpcomingRow(it, buildDate) {
  */
 export function validateUpcoming(payload, meta) {
   if (!isObj(payload) || typeof payload.dataVersion !== 'string'
-      || typeof payload.generatorVersion !== 'string' || !ISO_DATE.test(payload.buildDate ?? '')
+      || typeof payload.generatorVersion !== 'string' || !isCalendarDate(payload.buildDate)
       || !Number.isInteger(payload.count) || !Number.isInteger(payload.codeCount)
       || !Array.isArray(payload.items)) {
     return { ok: false, reason: 'invalid' };
@@ -688,11 +699,16 @@ export function upcomingDecision(it) {
   if (it.priceState === 'priced') {
     if (!it.everPriced) return { rule: 10, label: '首次有價', sub: `${d} 起 ${Y} 元`, type: 'first_priced' };
     if (it.previousState === 'terminated' || it.previousState === 'suspended') {
-      // relisted 的差額與百分比在 record 上已有值，必須呈現，不得只顯示新價（§4.2）
+      // §4.2／U4：relisted 的差額與百分比在 record 上已有值，**兩者都必須呈現**，
+      // 不得只顯示新價或只顯示百分比
+      const parts = [];
+      if (it.absoluteChange !== null) parts.push(`${fmtSigned(fmtMoney(it.absoluteChange))} 元`);
+      if (it.percentChange !== null) parts.push(fmtPct(it.percentChange));
+      parts.push('跨越停止期間');
       return {
         rule: 11,
         label: '恢復支付',
-        sub: `${d} 起 ${before} → ${Y} 元${pct ? `${pct}，跨越停止期間）` : '（跨越停止期間）'}`,
+        sub: `${d} 起 ${before} → ${Y} 元（${parts.join('，')}）`,
         type: 'relisted',
       };
     }
