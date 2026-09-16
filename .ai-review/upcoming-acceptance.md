@@ -92,7 +92,12 @@
 ## 5. 待辦
 
 - [ ] **U14 未達標的處置決策**：接受現況並記錄／修訂門檻／進一步優化（見第 1 節）
-- [ ] 合併後手動 dispatch 一次 `Build Price History Data`：確認 (1) 例行路徑維持
-      `upcoming.json` 與 `drug_index.json` 同進退、(2) 本次新增的 meta 統計補齊路徑
-      在真實環境跑得動（排程管線沒跑過就是沒驗過）
+- [x] **2026-09-16 14:01 手動 dispatch 完成**（run `35061855287`，commit `d8b1fab`）：
+      來源未變，只有 `meta.json`＋`upcoming.json`＋`status.json` 進 commit，
+      `drug_index.json` 與 `history/` 未變——即本次新增的「只有 meta 變動的修復批次」路徑。
+      線上實測 `meta.upcomingRows=82`／`upcomingCodes=79`、`upcoming.buildDate=2026-09-16`、
+      三檔 `dataVersion` 一致。
+      註：同日 10:20 另有一筆紅叉，是**重跑 2026-09-13 排程那一跑**（attempt 2）；
+      GitHub 重跑用原 commit SHA，推送必然被拒（`! [rejected] main -> main`），
+      這是 workflow「禁止強制推送」的預期行為，未寫入任何檔案
 - [ ] 序 11 副標變更後的藥師再目檢（一列，見第 3 節註）
