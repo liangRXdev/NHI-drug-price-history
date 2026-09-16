@@ -75,3 +75,22 @@ Codex 逐條核對 `.ai-review/upcoming-acceptance.md` 的 ✅，指出 **U1／U
 7. **T7**：U14 重測與數字更新
 8. **R2、R10**：死守衛與診斷紀錄
 9. **X1**：把目檢紀錄帶回 main，並依上述修正重寫 `.ai-review/upcoming-acceptance.md`
+
+
+---
+
+## 6. 處置結果（2026-09-16，branch `fix/upcoming-review`）
+
+| # | commit | 結果 |
+|---|---|---|
+| R1、R2、R3、R7、R8、T2、T6 | `36f9e56` | 快照與請求狀態分離、abort 歸網路類、離開頁面使在途請求失效、進入時重取 T、篩選後計數；新增 `e2e/upcoming-freshness.spec.mjs`（11 項）。**反向哨兵：以 d83a70d 的 app.js 重跑，R1／R8／T2／R3／R7 五項皆紅** |
+| R9、R10 | `68b829f` | 序 11 副標補差額金額（spec v0.3.2 同步修訂）、內容不合法寫 console |
+| R4、T1 | `becb6cc` | 兩端改為「外形 ＋ 真實日曆日」，共用 `tests/fixtures/dates.json`。**反向哨兵：退回只驗外形 → node 9 紅** |
+| R5、R6、T3 | `b169bd6` | `published_json()` 以 `git show HEAD:` 判定已發布版本；meta 統計納入完成定義；`build-data.yml` 差異判定加入 `data/meta.json`；兩個新情境測試 |
+| T4、T5、T8 | `8e119e5` | U1 補三個欄位、U7a 改完整 items 逐欄、U12 完整 16 欄矩陣、U8 完整集合＋每列到期狀態、U15 補 DOM 驗證 |
+| T7 | `34500c6` | 終點改為 layout 完成；`content-visibility` 使成本減半；**U14 由達標改判未達標**，數字與處置選項寫入驗收文件 |
+| X1 | `09b2ea2` | 目檢紀錄 cherry-pick 回本分支 |
+
+修正後：`pytest 245`／`npm test 177`／`npm run e2e 117` 全綠。
+
+**仍待使用者決策**：U14 的 fetch→可捲動（約 400 ms vs 200 ms）與重繪（約 87 ms vs 50 ms）。
