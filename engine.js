@@ -14,6 +14,12 @@
 //   §5.5.1 預告清單合法性   → validateUpcoming()
 //   §5.1 徽章數字（依 T）   → upcomingPendingCount()
 //
+// 規則對應 spec-compare.md：
+//   §4.3 兩層狀態          → dayState()、statusBands()
+//   §4.1.1 基準資格        → relativeBaseline()、relativeIndex()
+//   §4.1.2 繪製資格        → compareSegments()
+//   §4.4 共用 X 軸與 preset → compareRange()、minusYears()
+//
 // 日期一律為 ISO 'YYYY-MM-DD' 字串（字典序即時間序）；有效區間為閉區間 [from, to]，to=null 為無迄日。
 
 export const MAX_RESULTS = 50;
@@ -905,3 +911,194 @@ export const UPCOMING_FLAG_TEXT = {
   question_mark: '品名含「?」（來源缺字）',
   inconsistent_metadata: '描述欄位不一致',
 };
+
+// ── 多代號比較：每代號契約（spec-compare.md §4.1、§4.3、§4.4）──────
+// 比較頁**不另寫一套摘要邏輯**：摘要、描述欄位、狀態標籤一律重用 summaryAt()／
+// selectMeta()／stateLabel()。本節只新增「把各代號結果放到共同座標」所需的純函式。
+
+export const COMPARE_MAX = 4;
+const CODE_RE = /^[A-Z0-9]{10}$/;                 // §3.3 第 5 步（v0.3.1 釘死）
+
+export const isValidCode = (c) => CODE_RE.test(c);
+
+/** 該代號所有 records 的有效區間聯集。open＝有開放迄日（右界無限）。 */
+function unionBounds(records) {
+  if (!records.length) return null;
+  let min = records[0].from;
+  let max = null;
+  let open = false;
+  for (const r of records) {
+    if (r.from < min) min = r.from;
+    if (r.to === null) open = true;
+    else if (max === null || r.to > max) max = r.to;
+  }
+  return { min, max, open };
+}
+
+/**
+ * §4.3 第二層：某一日的日期／價格狀態，**由上而下取第一個符合**。
+ * → { rule, kind, tooltip, record }
+ *
+ * 序 2／3／4 依**有效區間聯集**判定，不依最後一列的位置：長區間包覆短區間時，
+ * 「最後起日那筆」已結束不代表資料覆蓋已結束（spec.md §6.4 的累計最大迄日原則）。
+ */
+export function dayState(records, day, priors = priorPrices(records)) {
+  const bounds = unionBounds(records);
+  if (!bounds) return { rule: 0, kind: 'no_records', tooltip: '無有效支付紀錄', record: null };
+
+  const eff = records.filter((r) => isEffective(r, day));
+  // 衝突 flag 只作用於帶該 flag 的那筆紀錄所涵蓋的日期，不擴張到首筆前或空窗
+  if (eff.length > 1 || eff.some((r) => (r.flags || []).includes('conflicting_price_interval'))) {
+    return { rule: 1, kind: 'conflict', tooltip: '來源紀錄衝突，無法判定單一支付價', record: null };
+  }
+  if (day < bounds.min) return { rule: 2, kind: 'before', tooltip: '尚未有紀錄', record: null };
+  if (!bounds.open && bounds.max !== null && day > bounds.max) {
+    return { rule: 3, kind: 'uncovered', tooltip: '本站資料未涵蓋此日期', record: null };
+  }
+  if (eff.length === 0) return { rule: 4, kind: 'gap', tooltip: '此日期無支付紀錄', record: null };
+
+  const r = eff[0];
+  const prior = priors.get(r) ?? null;
+  switch (r.priceState) {
+    case 'malformed':
+      return { rule: 5, kind: 'malformed', tooltip: `資料格式異常（原始值：${r.rawPrice}）`, record: r };
+    case 'missing':
+      return { rule: 6, kind: 'missing', tooltip: '來源無支付價資料', record: r };
+    case 'terminated':
+      // 該列之前從未有價：不得出現「終止」字樣（spec.md §5.3 首列 0 元例外）
+      return prior === null
+        ? { rule: 7, kind: 'unpriced_zero', tooltip: '健保支付價 0 元（此前無有價紀錄）', record: r }
+        : { rule: 8, kind: 'terminated', tooltip: `已終止支付（終止前 ${fmtMoney(prior)} 元）`, record: r };
+    case 'suspended':
+      return {
+        rule: 9,
+        kind: 'suspended',
+        tooltip: prior === null
+          ? `暫停支付（來源標示「${r.rawPrice}」）`
+          : `暫停支付（來源標示「${r.rawPrice}」，暫停前 ${fmtMoney(prior)} 元）`,
+        record: r,
+      };
+    default:
+      return {
+        rule: 10,
+        kind: 'priced',
+        tooltip: `${r.rawPrice} 元（${r.from} ～ ${r.to === null ? '無迄日' : r.to}）`,
+        record: r,
+      };
+  }
+}
+
+/**
+ * §4.3 狀態時間帶：把 [winFrom, winTo] 切成連續不重疊的段，每段一個狀態。
+ * 邊界取自各 record 的起日與迄日次日，因此段內狀態必定一致；相鄰同狀態者合併。
+ */
+export function statusBands(records, winFrom, winTo, today) {
+  if (!records.length || winTo < winFrom) return [];
+  const priors = priorPrices(records);
+  const marks = new Set([winFrom]);
+  for (const r of records) {
+    if (r.from > winFrom && r.from <= winTo) marks.add(r.from);
+    if (r.to !== null) {
+      const next = addDays(r.to, 1);
+      if (next > winFrom && next <= winTo) marks.add(next);
+    }
+  }
+  const starts = [...marks].sort();
+  const out = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    const from = starts[i];
+    const to = i + 1 < starts.length ? addDays(starts[i + 1], -1) : winTo;
+    const st = dayState(records, from, priors);
+    const prev = out[out.length - 1];
+    if (prev && prev.kind === st.kind && prev.tooltip === st.tooltip) prev.to = to;
+    else out.push({ from, to, kind: st.kind, rule: st.rule, tooltip: st.tooltip, record: st.record, upcoming: from > today });
+  }
+  return out;
+}
+
+/**
+ * §4.1.1 相對變化模式的基準。
+ * → { kind: 'ok'|'none'|'undeterminable', record, date, price, rawPrice }
+ *
+ * 候選資格：`priced`、不帶 `conflicting_price_interval`、且其起日當天不存在其他有效紀錄。
+ * 跳過不合格的更早列時，圖例顯示的是**實際採用那一列**的起日，不得稱為「歷史首筆價格」。
+ */
+export function relativeBaseline(records) {
+  const priced = records.filter((r) => r.priceState === 'priced');
+  if (!priced.length) return { kind: 'none', record: null };
+  const eligible = priced.filter((r) => !(r.flags || []).includes('conflicting_price_interval')
+    && records.filter((o) => isEffective(o, r.from)).length === 1);
+  if (!eligible.length) return { kind: 'undeterminable', record: null };
+  const rec = eligible.reduce((m, r) => (r.from < m.from ? r : m), eligible[0]);
+  return { kind: 'ok', record: rec, date: rec.from, price: rec.price, rawPrice: rec.rawPrice };
+}
+
+/** 指數值＝100 × 當期價 ÷ 自身基準價，四捨五入（遠離 0）至小數 1 位；以十進位計算避免浮點邊界。 */
+export function relativeIndex(rawPrice, baseRawPrice) {
+  const p = parseDecimal(rawPrice);
+  const b = parseDecimal(baseRawPrice);
+  if (!p || !b || p.int <= 0n || b.int <= 0n) return null;
+  const [pi, bi] = align(p, b);
+  const tenths = roundDiv(pi * 1000n, bi);
+  return `${tenths / 10n}.${tenths % 10n}`;
+}
+
+/**
+ * §4.1.2 繪製資格＝**有效有價區間與顯示視窗相交**（不是「起日落在視窗內」）。
+ * 回傳裁切到視窗內的有價線段；`clipped*` 表示該段在視窗外仍延續。
+ */
+export function compareSegments(records, winFrom, winTo, today) {
+  const out = [];
+  for (const r of records) {
+    if (r.priceState !== 'priced') continue;
+    const segTo = r.to === null ? winTo : r.to;
+    if (segTo < winFrom || r.from > winTo) continue;          // 不相交
+    out.push({
+      from: r.from < winFrom ? winFrom : r.from,
+      to: segTo > winTo ? winTo : segTo,
+      price: r.price,
+      rawPrice: r.rawPrice,
+      record: r,
+      upcoming: r.from > today,
+      clippedLeft: r.from < winFrom,
+      clippedRight: segTo > winTo,
+    });
+  }
+  return out;
+}
+
+/** 視窗內是否有可繪製的有價區間；配合 §4.1.1 的三種無線狀態使用。 */
+export function hasDrawableSegment(records, winFrom, winTo, today) {
+  return compareSegments(records, winFrom, winTo, today).length > 0;
+}
+
+export const COMPARE_PRESETS = { all: null, y3: 3, y5: 5, y10: 10 };
+
+/** 日期減 N 年；2 月 29 日等不存在的日子夾到當月最後一天（閏日以實際日曆計算）。 */
+export function minusYears(iso, years) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const target = y - years;
+  const lastDay = new Date(Date.UTC(target, m, 0)).getUTCDate();
+  const day = Math.min(d, lastDay);
+  return `${String(target).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/**
+ * §4.4 共用 X 軸範圍。右界＝max(T, 最後一筆預告起日)——預告要能看見。
+ * preset 只裁切左界，**不改變** T、基準與摘要參考日。
+ * → { from, to } 或 null（無任何可繪製日期列）
+ */
+export function compareRange(series, today, preset = 'all') {
+  const limit = addDays(today, 365 * FAR_FUTURE_YEARS);
+  const recs = series.flatMap((s) => s.records || []).filter((r) => r.from <= limit);
+  if (!recs.length) return null;
+  let earliest = recs[0].from;
+  let lastFrom = recs[0].from;
+  for (const r of recs) {
+    if (r.from < earliest) earliest = r.from;
+    if (r.from > lastFrom) lastFrom = r.from;
+  }
+  const to = lastFrom > today ? lastFrom : today;
+  const years = COMPARE_PRESETS[preset] ?? null;
+  return { from: years === null ? earliest : minusYears(today, years), to };
+}
