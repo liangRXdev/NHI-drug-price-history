@@ -19,8 +19,8 @@
 - [x] Phase 3：`TFDA-drug-info-search` 健保代號表新增「健保藥價歷史 → 查看 ↗」欄（2026-09-12，`62de833`，線上端到端驗證通過）
 - [x] Phase 5 多代號比較（`spec-compare.md`）：比較籃／多序列圖表／狀態時間帶／摘要對照表／
       合併事件表／CSV／失敗矩陣（驗收紀錄：[`.ai-review/compare-acceptance.md`](.ai-review/compare-acceptance.md)；
-      藥師目檢 6 項通過；M17 情境 A 未達標待決策）
-- [x] Phase 4 預告中心（`spec-upcoming.md`）：`data/upcoming.json`、`?view=upcoming` 清單、事件標籤、篩選排序分組、CSV 匯出（驗收紀錄：[`.ai-review/upcoming-acceptance.md`](.ai-review/upcoming-acceptance.md)；藥師目檢待執行）
+      藥師目檢 6 項通過；M17 效能門檻依實測修訂，見 spec §8.1）
+- [x] Phase 4 預告中心（`spec-upcoming.md`）：`data/upcoming.json`、`?view=upcoming` 清單、事件標籤、篩選排序分組、CSV 匯出（驗收紀錄：[`.ai-review/upcoming-acceptance.md`](.ai-review/upcoming-acceptance.md)；藥師目檢通過；U14 效能門檻依實測修訂，見 spec §8.2）
 
 ## 資料語意（摘要）
 
@@ -56,6 +56,17 @@ build 日 `D` 當下**尚未生效**（`from > D`）的全部紀錄，一列一�
 4. 預告列的品名等描述欄位取自資料產生日的有效列（非預告列本身）；若品名在生效時一併異動，本站會落後一個 build 週期。
 5. **「資料產生日」與「最後檢查日」是兩個不同的日期**，相差數週屬正常（見上節）。
 6. **CSV 的欄位型別由試算表軟體自行推斷**，本站無法控制：Excel 直接開啟可能把 `0.00` 顯示為 `0`、把代號當成科學記號。需要原值時請用「資料 → 從文字/CSV」匯入並將該欄指定為文字；檔案本身的位元組內容一律保真（UTF-8 with BOM、RFC 4180）。
+
+## 效能門檻與資料層天花板
+
+`spec-upcoming.md` §8.2 與 `spec-compare.md` §8.1 的效能門檻於 2026-09-16 依實測修訂
+（預告中心 200 → 600 ms／50 → 120 ms；比較頁情境 A 600 → 2,400 ms）。
+**這是接受現況，不是宣告已優化**：綠燈代表「與 2026-09-16 的實測相當」，
+不代表達成原始設計目標，兩份規格都記錄了原目標、實測值與歸因。
+
+共同瓶頸在資料層而非畫面：首屏必載的 `drug_index.json` 為 3.28 MB gzip（E7 既有問題），
+單片 shard raw 1.2–1.5 MB，比較頁一次要四片。要真的變快必須改變分片或啟動策略，
+會動到既有 shard 契約，應另行提案一併處理。
 
 ## 多代號比較（`?codes=`）
 
