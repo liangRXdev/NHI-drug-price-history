@@ -55,6 +55,33 @@
         </div>
         <p class="hint">已公告、尚未生效的健保支付價異動。本頁不代表醫療院所實際採購價、零售價或病人自付金額；預告內容以健保署最新公告為準。</p>
         <div id="upcomingBanner"></div>
+        <div id="upcomingControls" class="upcoming-controls" hidden>
+          <label for="upType">事件型別
+            <select id="upType">
+              <option value="all">全部</option>
+              <option value="decrease">調降</option>
+              <option value="increase">調升</option>
+              <option value="terminated">終止支付</option>
+              <option value="suspended">暫停支付</option>
+              <option value="relisted">恢復支付</option>
+              <option value="first_priced">首次有價／0 元</option>
+              <option value="unchanged">續期（支付價不變）</option>
+              <option value="other">無法判定／資料異常</option>
+            </select>
+          </label>
+          <label for="upAtc">ATC <select id="upAtc"><option value="">全部</option></select></label>
+          <label for="upDate">生效日 <select id="upDate"><option value="">全部</option></select></label>
+          <label for="upQ">關鍵字 <input id="upQ" type="search" maxlength="100" autocomplete="off"
+                 spellcheck="false" placeholder="代號／品名／成分"></label>
+          <label for="upSort">排序
+            <select id="upSort">
+              <option value="date_asc">生效日（近 → 遠）</option>
+              <option value="date_desc">生效日（遠 → 近）</option>
+              <option value="change_desc">變動幅度（大 → 小）</option>
+            </select>
+          </label>
+          <button type="button" id="upCsv" data-action="upcoming-csv">匯出 CSV</button>
+        </div>
         <p id="upcomingStatus" class="search-status" role="status"></p>
         <div id="upcomingList" class="upcoming-list" aria-live="polite"></div>
       </div>

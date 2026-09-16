@@ -337,13 +337,14 @@ build 為每週一次，`T` 可能已越過某些 `effectiveDate`。
 
 | 控制項 | URL 參數 | 合法值 | 預設 | 無效值處理 |
 |---|---|---|---|---|
-| 事件型別 | `type` | `all`／`decrease`／`increase`／`terminated`／`suspended`／`relisted`／`other` | `all` | 忽略該參數，回預設，不報錯 |
+| 事件型別 | `type` | `all` ＋ §4.1.1 的 8 個值：`decrease`／`increase`／`terminated`／`suspended`／`relisted`／`first_priced`／`unchanged`／`other` | `all` | 忽略該參數，回預設，不報錯 |
 | ATC | `atc` | 單一大寫英文字母 A–V，且須存在於本份清單 | 全部 | 同上 |
 | 關鍵字 | `q` | 任意字串，長度 ≤ 100 | 空 | 截斷至 100 |
 | 生效日 | `date` | `YYYY-MM-DD`，且須精確等於清單中某個批次日 | 全部 | 同上 |
 | 排序 | `sort` | `date_asc`／`date_desc`／`change_desc` | `date_asc` | 同上 |
 
-- `type=other` 的集合明確定義為：`first_priced`、`missing`、`malformed`、無法判定。**不是「以上皆非」的殘集**
+- `type=other` 的集合明確定義為 §4.1.1 映射到 `other` 的四列：序 1（衝突／`unknown`）、序 2（`malformed`）、序 3（`missing`）、序 14（安全網）。**不是「以上皆非」的殘集**
+  - v0.3 此處原寫「`first_priced`、`missing`、`malformed`、無法判定」，與 §4.1.1 把序 4／7／10 映射到 `first_priced` 直接衝突（同一列會同時屬於兩個互斥選項）。§4.1.1 自稱「即 §5.3 中 `type` 合法值的完整值域」且 U9 依它列舉 8 個值，故以 §4.1.1 為準（v0.3.1）
 - `date` 的語意是**精確批次**，不是區間起點
 - 關鍵字比對 code／chName／enName／ingredient，不分大小寫子字串
 - 「幅度 desc」依 `percentChange` 的**絕對值**由大到小（調降 −30% 與調升 +30% 同級）；無 `percentChange` 者一律置底，**不得**視為 0%。同值時以 `effectiveDate` asc → `code` asc 決定順序
@@ -558,6 +559,7 @@ v0.1 只寫「缺欄位」，會被實作成寬鬆解析（跳過壞列照樣渲
 | v0.1 | 2026-09-14 | 初版 | — |
 | v0.2 | 2026-09-14 | 第一輪覆審後修訂 | `.ai-review/plan-verdict-upcoming.md` |
 | v0.3 | 2026-09-14 | 第二輪覆審後修訂 | `.ai-review/plan-verdict-r2.md` |
+| v0.3.1 | 2026-09-16 | 實作期修正：§5.3 的 `type` 值域與 `other` 集合改以 §4.1.1 為準（原文與 §4.1.1 互相衝突） | 實作 `feat(ui): upcoming filters and grouping` |
 
 ### v0.2 逐項
 

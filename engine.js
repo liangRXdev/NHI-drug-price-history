@@ -715,3 +715,85 @@ export function upcomingDecision(it) {
 /** §5.3 篩選的 type 值域（§4.1.1 的完整映射結果）。 */
 export const UPCOMING_TYPES = ['all', 'decrease', 'increase', 'terminated', 'suspended',
   'relisted', 'first_priced', 'unchanged', 'other'];
+
+// ── 預告清單的篩選、排序與分組（spec-upcoming §5.3）──────────────
+export const UPCOMING_SORTS = ['date_asc', 'date_desc', 'change_desc'];
+const ATC_LETTER = /^[A-V]$/;
+
+/** 本份清單中實際出現的 ATC 首字母（升冪）；篩選值必須存在於清單中才算合法。 */
+export function upcomingAtcLetters(items) {
+  const set = new Set();
+  for (const it of items) {
+    const c = (it.atcCode || '').charAt(0).toUpperCase();
+    if (ATC_LETTER.test(c)) set.add(c);
+  }
+  return [...set].sort();
+}
+
+/** 本份清單中的批次日（升冪）。`date` 的語意是精確批次，不是區間起點。 */
+export function upcomingDates(items) {
+  return [...new Set(items.map((it) => it.effectiveDate))].sort();
+}
+
+/** URL 參數 → 篩選狀態；無效值一律回預設且不報錯（§5.3）。 */
+export function upcomingParams(search, items) {
+  const p = search instanceof URLSearchParams ? search : new URLSearchParams(search);
+  const type = UPCOMING_TYPES.includes(p.get('type')) ? p.get('type') : 'all';
+  const atc = upcomingAtcLetters(items).includes(p.get('atc')) ? p.get('atc') : '';
+  const date = upcomingDates(items).includes(p.get('date')) ? p.get('date') : '';
+  const sort = UPCOMING_SORTS.includes(p.get('sort')) ? p.get('sort') : 'date_asc';
+  return { type, atc, date, sort, q: (p.get('q') || '').slice(0, 100) };
+}
+
+function matchesQuery(it, q) {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return [it.code, it.chName, it.enName, it.ingredient]
+    .some((v) => typeof v === 'string' && v.toLowerCase().includes(needle));
+}
+
+function sortRows(rows, sort) {
+  const out = [...rows];                       // 來源順序已是 §3.2 的 date→event→code→索引
+  if (sort === 'date_desc') {
+    out.sort((a, b) => (a.it.effectiveDate < b.it.effectiveDate ? 1 : a.it.effectiveDate > b.it.effectiveDate ? -1 : 0));
+  } else if (sort === 'change_desc') {
+    // 幅度取絕對值（−30% 與 +30% 同級）；無 percentChange 者一律置底，不得視為 0%
+    const mag = (r) => (typeof r.it.percentChange === 'number' ? Math.abs(r.it.percentChange) : null);
+    out.sort((a, b) => {
+      const [x, y] = [mag(a), mag(b)];
+      if (x !== y) {
+        if (x === null) return 1;
+        if (y === null) return -1;
+        return y - x;
+      }
+      if (a.it.effectiveDate !== b.it.effectiveDate) return a.it.effectiveDate < b.it.effectiveDate ? -1 : 1;
+      return a.it.code < b.it.code ? -1 : a.it.code > b.it.code ? 1 : 0;
+    });
+  }
+  return out;
+}
+
+/**
+ * → { total, rows, groups }。total 為**篩選前**的總列數（空結果的提示要用它）。
+ * groups 為 null 表示不分組：「幅度 desc」時分組會把最大變動切散在各批次裡（§5.3）。
+ */
+export function upcomingModel(items, params) {
+  const decorated = items.map((it) => ({ it, dec: upcomingDecision(it) }));
+  const matched = decorated.filter(({ it, dec }) => (
+    (params.type === 'all' || dec.type === params.type)
+    && (!params.atc || (it.atcCode || '').toUpperCase().startsWith(params.atc))
+    && (!params.date || it.effectiveDate === params.date)
+    && matchesQuery(it, params.q)
+  ));
+  const rows = sortRows(matched, params.sort);
+  let groups = null;
+  if (params.sort !== 'change_desc') {
+    groups = [];
+    for (const row of rows) {
+      const last = groups[groups.length - 1];
+      if (last && last.date === row.it.effectiveDate) last.rows.push(row);
+      else groups.push({ date: row.it.effectiveDate, rows: [row] });
+    }
+  }
+  return { total: items.length, rows, groups };
+}

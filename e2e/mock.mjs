@@ -106,3 +106,22 @@ export async function mockSite(page, opts = {}) {
   });
   return { data, calls, attempts, json };
 }
+
+// ── 預告清單的合成資料（§9.1：多數規則在真實資料裡零實例）──────────
+export function upcomingItem(o = {}) {
+  return {
+    code: 'T000000100', chName: '測試藥', enName: 'TEST TAB', ingredient: 'TESTINE',
+    strength: '10', strengthUnit: 'MG', dosageForm: '錠劑', atcCode: 'A01AA01',
+    manufacturer: '測試藥廠', effectiveDate: '2026-10-01', endDate: null,
+    eventType: 'initial', priceState: 'terminated', price: null, rawPrice: '0.00',
+    previousPrice: null, pricedBefore: null, previousState: null, absoluteChange: null,
+    percentChange: null, crossesStop: false, everPriced: false, flags: [], ...o,
+  };
+}
+
+export function upcomingPayload(items, buildDate = '2026-09-11') {
+  return {
+    dataVersion: DATA_VERSION, generatorVersion: 'upcoming/1', buildDate,
+    count: items.length, codeCount: new Set(items.map((i) => i.code)).size, items,
+  };
+}

@@ -217,12 +217,24 @@ table.history .cell-state { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 }
 @keyframes skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
+.upcoming-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: flex-end; margin: 0.7rem 0 0.2rem; font-size: 0.8rem; }
+.upcoming-controls label { display: flex; flex-direction: column; gap: 0.2rem; color: var(--text-muted); }
+.upcoming-controls select, .upcoming-controls input {
+  font: inherit; color: var(--text-primary); background: #fff;
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.4rem;
+}
+.upcoming-controls button { align-self: flex-end; padding: 0.35rem 0.7rem; }
+.upcoming-group h3 { font-size: 0.9rem; margin: 1.1rem 0 0.4rem; padding-bottom: 0.25rem; border-bottom: 2px solid var(--accent); }
+.upcoming-group:first-child h3 { margin-top: 0.4rem; }
+.upcoming-group .upcoming-row + .upcoming-row { margin-top: 0.5rem; }
+
 @media (max-width: 480px) {
   .wrap { padding: 1rem 0.75rem 3rem; }
   .card { padding: 1rem 0.85rem 1.2rem; }
   .metric.key { grid-column: auto; }
   .results { grid-template-columns: 1fr; }
   .upcoming-badge { margin-top: 0.5rem; }
+  .upcoming-controls label { flex: 1 1 8rem; }
   .facts { grid-template-columns: 1fr; }
   .facts dt { margin-top: 0.3rem; }
   table.history { font-size: 0.78rem; }

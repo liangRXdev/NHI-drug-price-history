@@ -739,12 +739,14 @@ function renderUpcoming() {
   if (u.phase === 'loading') {
     status.textContent = '預告資料載入中…';
     $('upcomingBanner').innerHTML = '';
+    $('upcomingControls').hidden = true;
     list.innerHTML = '<div class="skeleton" aria-hidden="true"></div>'.repeat(3);
     return;
   }
   if (u.phase !== 'ready') {
     status.textContent = '';
     list.innerHTML = '';
+    $('upcomingControls').hidden = true;        // 資料不可用時篩選與匯出一併停用
     const retry = u.reason === 'version_mismatch'
       ? '<button type="button" data-action="reload">重新整理</button>'
       : '<button type="button" data-action="retry-upcoming">重試</button>';
@@ -766,16 +768,76 @@ function renderUpcoming() {
   const items = u.payload.items;
   const pending = E.upcomingPendingCount(items, state.today);
   if (items.length === 0) {
+    $('upcomingControls').hidden = true;
     status.textContent = '目前資料中無未生效的公告。';
     list.innerHTML = '';
     return;
   }
+  const params = E.upcomingParams(new URLSearchParams(location.search), items);
+  syncUpcomingControls(items, params);
+  const model = E.upcomingModel(items, params);
+
+  if (model.rows.length === 0) {
+    // 不得只顯示「查無」：N 為篩選前的總列數，讓使用者知道清單本身有資料
+    status.textContent = `目前篩選條件下沒有符合的公告（清單共 ${model.total} 筆）。`;
+    list.innerHTML = '';
+    return;
+  }
   // 全部已生效時仍列出全部，不得顯示為空白頁（§2）
+  const scope = model.rows.length === model.total
+    ? `共 ${model.total} 筆公告`
+    : `符合篩選條件 ${model.rows.length} 筆（清單共 ${model.total} 筆）`;
   status.textContent = pending === 0
-    ? `目前資料中已無未生效的公告；以下 ${items.length} 筆為本站資料產生後已生效、尚未重建的紀錄。`
-    : `共 ${items.length} 筆公告，其中 ${pending} 筆尚未生效。`;
-  list.innerHTML = items.map(upcomingRowHTML).join('');
+    ? `${scope}；目前資料中已無未生效的公告，以下為本站資料產生後已生效、尚未重建的紀錄。`
+    : `${scope}，其中 ${pending} 筆尚未生效。`;
+  list.innerHTML = model.groups
+    ? model.groups.map((g) => `<section class="upcoming-group">
+        <h3>${esc(g.date)} 起（${g.rows.length} 品項）</h3>
+        ${g.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('')}
+      </section>`).join('')
+    : model.rows.map(({ it, dec }) => upcomingRowHTML(it, dec)).join('');
 }
+
+const UPCOMING_CONTROLS = { upType: 'type', upAtc: 'atc', upDate: 'date', upQ: 'q', upSort: 'sort' };
+
+/** 依目前清單填 ATC 與批次日選項；只在資料換過時重填，避免每次輸入都重建 DOM。 */
+let upcomingOptionsFor = null;
+function syncUpcomingControls(items, params) {
+  const box = $('upcomingControls');
+  box.hidden = false;
+  if (upcomingOptionsFor !== items) {
+    const opt = (v, text) => `<option value="${esc(v)}">${esc(text)}</option>`;
+    $('upAtc').innerHTML = opt('', '全部') + E.upcomingAtcLetters(items).map((c) => opt(c, c)).join('');
+    $('upDate').innerHTML = opt('', '全部') + E.upcomingDates(items).map((d) => opt(d, d)).join('');
+    upcomingOptionsFor = items;
+  }
+  for (const [id, key] of Object.entries(UPCOMING_CONTROLS)) {
+    if ($(id).value !== params[key]) $(id).value = params[key];
+  }
+}
+
+/** 篩選狀態序列化進 URL（可分享、可重整），但不寫入 localStorage：這是一次性檢視。 */
+function writeUpcomingURL() {
+  const p = new URLSearchParams({ view: 'upcoming' });
+  for (const [id, key] of Object.entries(UPCOMING_CONTROLS)) {
+    const v = $(id).value;
+    if (v && !(key === 'type' && v === 'all') && !(key === 'sort' && v === 'date_asc')) p.set(key, v);
+  }
+  history.replaceState(history.state, '', `?${p}`);
+}
+
+function onUpcomingControl() {
+  writeUpcomingURL();
+  renderUpcoming();
+}
+
+let upcomingFrame = 0;
+function scheduleUpcomingRender() {
+  cancelAnimationFrame(upcomingFrame);
+  upcomingFrame = requestAnimationFrame(onUpcomingControl);
+}
+
+
 
 // 標籤底色只反映事件性質，不新增語彙（§4.1）
 const UPCOMING_TAG_CLASS = {
@@ -783,8 +845,7 @@ const UPCOMING_TAG_CLASS = {
   increase: 'info', decrease: 'info', relisted: 'info', first_priced: 'info', unchanged: 'info',
 };
 
-function upcomingRowHTML(it) {
-  const dec = E.upcomingDecision(it);
+function upcomingRowHTML(it, dec = E.upcomingDecision(it)) {
   const expired = it.effectiveDate <= state.today;
   const sub = [it.ingredient, it.strength ? `${it.strength}${it.strengthUnit ? ` ${it.strengthUnit}` : ''}` : '', it.dosageForm]
     .filter(Boolean).map(esc).join('・');
@@ -867,6 +928,12 @@ function bind() {
       try { localStorage.setItem('cbSafe', e.target.checked ? '1' : ''); } catch { /* 私密模式等：僅本次有效 */ }
     }
   });
+
+  for (const id of ['upType', 'upAtc', 'upDate', 'upSort']) {
+    $(id).addEventListener('change', onUpcomingControl);
+  }
+  $('upQ').addEventListener('input', (e) => { if (!e.isComposing) scheduleUpcomingRender(); });
+  $('upQ').addEventListener('compositionend', scheduleUpcomingRender);
 
   window.addEventListener('popstate', route);
 
