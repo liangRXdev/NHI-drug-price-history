@@ -712,12 +712,19 @@ async function loadUpcoming({ force = false } = {}) {
         snapshot: { payload, checkedAt: state.statusSettled ? (state.status?.lastCheckedAt ?? null) : null },
         error: null, reason: null, updateFailed: null, refreshing: false,
       };
-    } else next = { phase: 'error', snapshot: null, error: null, reason: v.reason, updateFailed: null, refreshing: false };
+    } else {
+      // §5.5：內容不合法或版本不符須於 console 記錄，供回報時診斷（不輸出整份資料）
+      console.warn(`[NHI] data/upcoming.json 未通過驗證：${v.reason}`);
+      next = { phase: 'error', snapshot: null, error: null, reason: v.reason, updateFailed: null, refreshing: false };
+    }
   } catch (e) {
     const err = e instanceof LoadError ? e : new LoadError('invalid', String(e));
     // 網路／HTTP／逾時：已有經驗證的快照就保留舊清單，連同當時的 buildDate 與檢查日一起標示；
     // 內容不合法與版本不符則不得保留——新資料證明來源已壞（§5.5）
-    if (err.kind === 'invalid') next = fail(err, 'invalid');
+    if (err.kind === 'invalid') {
+      console.warn(`[NHI] data/upcoming.json 內容不合法：${err.message}`);
+      next = fail(err, 'invalid');
+    }
     else if (state.upcoming.snapshot) {
       next = { ...state.upcoming, phase: 'ready', error: null, reason: null, updateFailed: err, refreshing: false };
     } else next = fail(err, 'unavailable');

@@ -53,7 +53,7 @@ const CASES = [
   [10, item({ priceState: 'priced', price: 12.5, rawPrice: '12.50', eventType: 'first_priced' }),
     { label: '首次有價', sub: '2026-10-01 起 12.50 元', type: 'first_priced' }],
   [11, item({ priceState: 'priced', price: 22.9, rawPrice: '22.90', eventType: 'relisted', previousState: 'terminated', everPriced: true, pricedBefore: 29.8, previousPrice: 29.8, absoluteChange: -6.9, percentChange: -23.15, crossesStop: true }),
-    { label: '恢復支付', sub: '2026-10-01 起 29.80 → 22.90 元（−23.15%，跨越停止期間）', type: 'relisted' }],
+    { label: '恢復支付', sub: '2026-10-01 起 29.80 → 22.90 元（−6.90 元，−23.15%，跨越停止期間）', type: 'relisted' }],
   [12, item({ priceState: 'priced', price: 94, rawPrice: '94.00', eventType: 'unchanged', previousState: 'priced', everPriced: true, pricedBefore: 94, previousPrice: 94 }),
     { label: '續期（支付價不變）', sub: '2026-10-01 起 94.00 元，與前期相同', type: 'unchanged' }],
   [13, item({ priceState: 'priced', price: 7.9, rawPrice: '7.90', eventType: 'increase', previousState: 'priced', everPriced: true, pricedBefore: 6.9, previousPrice: 6.9, absoluteChange: 1, percentChange: 14.49 }),
@@ -89,7 +89,8 @@ test('U4 續期必須顯示停止前金額；恢復支付必須顯示差額百�
   const sub = (rule) => CASES.find(([r]) => r === rule)[2].sub;
   assert.match(sub(5), /終止前 245\.00 元/);
   assert.match(sub(8), /暫停前 18\.00 元/);
-  assert.match(sub(11), /29\.80 → 22\.90 元（−23\.15%/);
+  // §4.2／U4：差額與百分比兩者都要出現，只有百分比不算數
+  assert.match(sub(11), /29\.80 → 22\.90 元（−6\.90 元，−23\.15%，跨越停止期間）/);
 });
 
 test('U4 序 1／2／3／14 不得顯示為確定的價格事件', () => {

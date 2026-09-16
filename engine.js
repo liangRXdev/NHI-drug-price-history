@@ -688,11 +688,16 @@ export function upcomingDecision(it) {
   if (it.priceState === 'priced') {
     if (!it.everPriced) return { rule: 10, label: '首次有價', sub: `${d} 起 ${Y} 元`, type: 'first_priced' };
     if (it.previousState === 'terminated' || it.previousState === 'suspended') {
-      // relisted 的差額與百分比在 record 上已有值，必須呈現，不得只顯示新價（§4.2）
+      // §4.2／U4：relisted 的差額與百分比在 record 上已有值，**兩者都必須呈現**，
+      // 不得只顯示新價或只顯示百分比
+      const parts = [];
+      if (it.absoluteChange !== null) parts.push(`${fmtSigned(fmtMoney(it.absoluteChange))} 元`);
+      if (it.percentChange !== null) parts.push(fmtPct(it.percentChange));
+      parts.push('跨越停止期間');
       return {
         rule: 11,
         label: '恢復支付',
-        sub: `${d} 起 ${before} → ${Y} 元${pct ? `${pct}，跨越停止期間）` : '（跨越停止期間）'}`,
+        sub: `${d} 起 ${before} → ${Y} 元（${parts.join('，')}）`,
         type: 'relisted',
       };
     }
