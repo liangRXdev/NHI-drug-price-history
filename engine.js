@@ -1102,3 +1102,67 @@ export function compareRange(series, today, preset = 'all') {
   const years = COMPARE_PRESETS[preset] ?? null;
   return { from: years === null ? earliest : minusYears(today, years), to };
 }
+
+/**
+ * §3.3 八步：URL → 選定清單。**順序不得調換**（先清洗去重合併，最後才截斷）。
+ * → { items: [{ code, valid }], skipped, full }
+ *   `items` 為截斷後的結果（≤ 4），`full` 為截斷前的完整有序清單，
+ *   `skipped` ＝ `full.length − COMPARE_MAX`（未超量為 0）。
+ *
+ * 格式不合法與確認不存在的代號**佔用名額**（它們要顯示在畫面上），所以截斷只依
+ * 格式層資訊，不因載入結果重新截斷。
+ */
+export function parseCompareCodes(search) {
+  const codesRaw = rawParam(search, 'codes');            // 1. 同名參數取第一個
+  const codeRaw = rawParam(search, 'code');
+  const tokens = splitCodes(codesRaw);                   // 2–3. 解碼一次 → 切分 → 丟棄空 token
+
+  const seen = new Set();
+  const list = [];
+  for (const token of tokens) {
+    const code = token.trim().toUpperCase();             // 4. 清洗
+    if (!code || seen.has(code)) continue;               // 6. 去重：保留最先出現者
+    seen.add(code);
+    list.push({ code, valid: isValidCode(code) });       // 5. 格式檢查（不合法者保留）
+  }
+
+  // 7. 合併 ?code=：無條件置於首位；已在清單中則移至首位，不重複加入。此步不截斷
+  const single = (splitCodes(codeRaw)[0] || '').trim().toUpperCase();
+  if (single) {
+    const at = list.findIndex((x) => x.code === single);
+    if (at >= 0) list.unshift(list.splice(at, 1)[0]);
+    else list.unshift({ code: single, valid: isValidCode(single) });
+  }
+
+  // 8. 截斷：N 一律以完整清單長度計算
+  return { items: list.slice(0, COMPARE_MAX), skipped: Math.max(0, list.length - COMPARE_MAX), full: list };
+}
+
+/** 取未解碼的原始參數值（URLSearchParams 會先解一次，再解就是解兩次）。 */
+function rawParam(search, key) {
+  const q = String(search || '').replace(/^\?/, '');
+  for (const part of q.split('&')) {
+    if (!part) continue;
+    const i = part.indexOf('=');
+    if ((i === -1 ? part : part.slice(0, i)) !== key) continue;
+    return i === -1 ? '' : part.slice(i + 1);
+  }
+  return null;
+}
+
+/** 解碼恰一次 → 以逗號切分 → 丟棄空 token（空 token 不計入略過數）。解碼失敗整個參數視為空。 */
+function splitCodes(raw) {
+  if (raw === null) return [];
+  let decoded;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return [];
+  }
+  return decoded.split(',').filter((t) => t.trim() !== '');
+}
+
+/** 選定清單 → `?codes=` 參數值（大寫、逗號分隔、依序）。 */
+export function serializeCompareCodes(items) {
+  return items.map((x) => (typeof x === 'string' ? x : x.code)).join(',');
+}

@@ -27,6 +27,12 @@
   --c-susp:        #6B7280;
   --c-unknown:     #8A4B08;
   --c-gap:         #B8AE9C;
+
+  /* 比較序位 1–4：Okabe-Ito 色盲安全色票，四色在三種色盲模擬下皆可區分 */
+  --s1: #0072B2;
+  --s2: #D55E00;
+  --s3: #009E73;
+  --s4: #CC79A7;
 }
 .cb-safe {
   --c-line:        #0072B2;
@@ -233,6 +239,39 @@ table.history .cell-state { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 .upcoming-group h3 { font-size: 0.9rem; margin: 1.1rem 0 0.4rem; padding-bottom: 0.25rem; border-bottom: 2px solid var(--accent); }
 .upcoming-group:first-child h3 { margin-top: 0.4rem; }
 .upcoming-group .upcoming-row + .upcoming-row { margin-top: 0.5rem; }
+
+/* 比較籃（spec-compare.md §3.2）：底部常駐列。序位 1–4 的顏色與線型同圖表 */
+.tray {
+  position: sticky; bottom: 0; z-index: 20; margin-top: 1rem;
+  background: var(--bg-card); border-top: 2px solid var(--accent);
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.06);
+}
+.tray-inner { max-width: 980px; margin: 0 auto; padding: 0.6rem 1rem; display: flex; gap: 0.5rem 0.8rem; align-items: center; flex-wrap: wrap; }
+.tray-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+.tray-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; flex: 1 1 auto; }
+.tray-chip { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem;
+  border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.3rem 0.15rem 0.5rem; }
+.tray-chip button { border: none; background: none; cursor: pointer; font-size: 1rem; line-height: 1; color: var(--text-muted); padding: 0 0.25rem; }
+.tray-chip button:hover { color: var(--danger); }
+.tray-name { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tray-actions { display: flex; gap: 0.5rem; align-items: center; }
+.tray-dot { width: 0.7rem; height: 0.7rem; border-radius: 2px; display: inline-block; }
+[data-slot="1"] .tray-dot { background: var(--s1); }
+[data-slot="2"] .tray-dot { background: var(--s2); }
+[data-slot="3"] .tray-dot { background: var(--s3); }
+[data-slot="4"] .tray-dot { background: var(--s4); }
+.link-btn { border: none; background: none; color: var(--accent-hover); cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
+.add-cmp { font-size: 0.75rem; padding: 0.15rem 0.5rem; }
+.result-wrap { position: relative; display: block; }
+.r-cmp { position: absolute; right: 0.6rem; bottom: 0.5rem; }
+.detail-cmp { display: inline-block; margin-top: 0.5rem; }
+.compare-codes { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.compare-code { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.85rem; }
+.compare-code[data-status="error"], .compare-code[data-status="invalid"] { border-color: #EF9A9A; background: #FDF3F2; }
+.compare-code[data-status="missing"] { border-color: #FFCC80; background: #FFF3E0; }
+.compare-name { flex: 1 1 8rem; overflow-wrap: anywhere; }
+.compare-state { color: var(--warn-text); font-size: 0.8rem; }
 
 @media (max-width: 480px) {
   .wrap { padding: 1rem 0.75rem 3rem; }

@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayState, statusBands, relativeBaseline, relativeIndex, compareSegments,
   hasDrawableSegment, compareRange, minusYears, isValidCode, summaryAt, selectMeta,
+  parseCompareCodes, serializeCompareCodes,
 } from '../engine.js';
 
 const FIX = new URL('../tests/fixtures/', import.meta.url);
@@ -248,4 +249,85 @@ test('§3.3 第 5 步的代號格式', () => {
   assert.equal(isValidCode('A02029632'), false);
   assert.equal(isValidCode('A0202963211'), false);
   assert.equal(isValidCode('A020-96321'), false);
+});
+
+// ── M4／M5：§3.3 八步（清洗 → 去重 → 合併 → 才截斷）──────────────
+const parsed = (search) => {
+  const r = parseCompareCodes(search);
+  return { codes: r.items.map((x) => x.code), invalid: r.items.filter((x) => !x.valid).map((x) => x.code), skipped: r.skipped };
+};
+
+test('M4 清洗：大小寫、前後空白、連續逗號與空 token', () => {
+  assert.deepEqual(parsed('?codes= a020296321 ,,  ,AC48867100'),
+    { codes: ['A020296321', 'AC48867100'], invalid: [], skipped: 0 });
+});
+
+test('M4 去重在截斷之前：重複碼不得佔用名額', () => {
+  // 先截前 4 個再去重的實作，會只剩 3 個有效品項
+  assert.deepEqual(parsed('?codes=A020296321,A020296321,AC48867100,B009254100,A035680329'),
+    { codes: ['A020296321', 'AC48867100', 'B009254100', 'A035680329'], invalid: [], skipped: 0 });
+});
+
+test('M4 格式不合法者保留並佔用名額，不靜默丟棄', () => {
+  assert.deepEqual(parsed('?codes=A020296321,BAD,AC48867100'),
+    { codes: ['A020296321', 'BAD', 'AC48867100'], invalid: ['BAD'], skipped: 0 });
+});
+
+test('M4 超量：略過數為完整清單長度 − 4', () => {
+  assert.deepEqual(parsed('?codes=A020296321,AC48867100,B009254100,A035680329,X000342121,X000346219'),
+    { codes: ['A020296321', 'AC48867100', 'B009254100', 'A035680329'], invalid: [], skipped: 2 });
+});
+
+test('M4 解碼恰一次，且發生在切分之前：%2C 是分隔符', () => {
+  assert.deepEqual(parsed('?codes=A020296321%2CAC48867100').codes, ['A020296321', 'AC48867100']);
+  // 解兩次才會把 %252C 變成分隔符——本實作只解一次，故它仍是同一個 token（且格式不合法）
+  assert.deepEqual(parsed('?codes=A020296321%252CAC48867100'),
+    { codes: ['A020296321%2CAC48867100'], invalid: ['A020296321%2CAC48867100'], skipped: 0 });
+});
+
+test('M4 解碼失敗 → 整個參數視為空', () => {
+  assert.deepEqual(parsed('?codes=%E4'), { codes: [], invalid: [], skipped: 0 });
+});
+
+test('M4 同名參數重複出現 → 取第一個', () => {
+  assert.deepEqual(parsed('?codes=A020296321&codes=AC48867100').codes, ['A020296321']);
+});
+
+test('M4 序列化回 URL 參數值', () => {
+  const r = parseCompareCodes('?codes=a020296321,ac48867100');
+  assert.equal(serializeCompareCodes(r.items), 'A020296321,AC48867100');
+});
+
+for (const [name, search, expectedCodes, skipped] of [
+  ['code 不在 codes 中 → 插入首位', '?codes=A020296321,AC48867100&code=B009254100',
+    ['B009254100', 'A020296321', 'AC48867100'], 0],
+  ['code 已在首位 → 不重複', '?codes=A020296321,AC48867100&code=A020296321',
+    ['A020296321', 'AC48867100'], 0],
+  ['code 在中間 → 移至首位', '?codes=A020296321,AC48867100,B009254100&code=AC48867100',
+    ['AC48867100', 'A020296321', 'B009254100'], 0],
+  ['code 在末尾 → 移至首位', '?codes=A020296321,AC48867100,B009254100&code=B009254100',
+    ['B009254100', 'A020296321', 'AC48867100'], 0],
+  ['清洗後才重複（小寫）→ 視為同一碼', '?codes=A020296321,AC48867100&code=a020296321',
+    ['A020296321', 'AC48867100'], 0],
+  ['容量 3 ＋ code → 剛好 4，不截斷', '?codes=A020296321,AC48867100,B009254100&code=A035680329',
+    ['A035680329', 'A020296321', 'AC48867100', 'B009254100'], 0],
+  ['容量 4 ＋ 新 code → 截斷且略過數為 1', '?codes=A020296321,AC48867100,B009254100,A035680329&code=X000342121',
+    ['X000342121', 'A020296321', 'AC48867100', 'B009254100'], 1],
+  ['容量 4 ＋ 已存在的 code → 移至首位，長度不變', '?codes=A020296321,AC48867100,B009254100,A035680329&code=A035680329',
+    ['A035680329', 'A020296321', 'AC48867100', 'B009254100'], 0],
+  ['code 為空值', '?codes=A020296321,AC48867100&code=', ['A020296321', 'AC48867100'], 0],
+  ['只有 code', '?code=A020296321', ['A020296321'], 0],
+]) {
+  test(`M5 ${name}`, () => {
+    const r = parsed(search);
+    assert.deepEqual(r.codes, expectedCodes);
+    assert.equal(r.skipped, skipped);
+  });
+}
+
+test('M5 容量 4 ＋ 已存在的 code：略過數必須是 0，不得因「已滿」誤報', () => {
+  // v0.2 讓合併步擠掉第 4 個、截斷步再算 N，四碼加一個已存在的 code 時 N 會變成 0 或 1 不定
+  const r = parseCompareCodes('?codes=A020296321,AC48867100,B009254100,A035680329&code=A035680329');
+  assert.equal(r.full.length, 4);
+  assert.equal(r.skipped, 0);
 });

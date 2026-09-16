@@ -31,6 +31,13 @@ const state = {
   upcoming: { phase: 'idle', snapshot: null, error: null, reason: null, updateFailed: null, refreshing: false },
   upcomingSeq: 0,
   upcomingInflight: 0,
+  // 多代號比較（spec-compare.md §3）：items 依加入順序，slot 為固定序位
+  compare: { items: [], skipped: 0 },
+  compareData: new Map(),
+  compareMismatch: false,
+  compareSeq: 0,
+  compareNotice: null,
+  shardInflight: new Map(),
 };
 
 // 逾時（毫秒）：請求卡住時必須在有限時間內轉為錯誤狀態，不可無限顯示「載入中」（codex R7）。
@@ -162,6 +169,7 @@ function renderCoreState() {
 function renderBanners() {
   const out = [];
   if (state.core === 'error' || state.core === 'mismatch') out.push(coreMessageHTML());
+  if (state.compareNotice) out.push(`<div class="alert alert--info">${esc(state.compareNotice)}</div>`);
   const st = stale();
   if (st.level === 'yellow' || st.level === 'red') {
     const cls = st.level === 'red' ? 'alert--error' : 'alert--warn';
@@ -224,13 +232,13 @@ function renderCard(d) {
   else if (c.kind === 'exhausted' || c.kind === 'conflict') price = `<span class="tag warn">${esc(c.text)}</span>`;
   else price = `<span class="tag info">${esc(c.text)}</span>`;
   const sub = [d.ingredient, strengthText(d), d.dosageForm].filter(Boolean).map(esc).join('・');
-  return `<a class="result" href="?code=${encodeURIComponent(d.code)}" data-code="${esc(d.code)}">
+  return `<div class="result-wrap"><a class="result" href="?code=${encodeURIComponent(d.code)}" data-code="${esc(d.code)}">
     <div class="r-top"><span class="r-name">${dash(d.chName)}</span><span class="r-code mono">${esc(d.code)}</span></div>
     <div class="r-en">${dash(d.enName)}</div>
     ${sub ? `<div class="r-sub">${sub}</div>` : ''}
     <div class="r-price">${price}${upcomingTag(c.upcoming)}</div>
     <div class="r-meta">最近異動 <span class="mono">${dash(d.lastPriceChangeDate)}</span>・歷史 ${d.historyCount} 筆・調價 ${d.priceChangeCount} 次 ${flagTags(d.flags)}</div>
-  </a>`;
+  </a><span class="r-cmp" data-cmp-slot="${esc(d.code)}">${compareButtonHTML(d.code)}</span></div>`;
 }
 
 function runSearch() {
@@ -284,16 +292,20 @@ function route() {
   const params = new URLSearchParams(location.search);
   const code = params.get('code');
   if (params.get('view') === 'upcoming') showUpcoming();
+  else if (params.get('codes') !== null) showCompare();
   else if (code !== null) showDetail(code.trim().toUpperCase());
   else showSearch();
 }
 
 function showSearch() {
+  state.compareNotice = null;
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
   state.upcomingSeq++;                 // 同時使在途的預告請求失效，其回應一律丟棄
+  state.compareSeq++;
   state.current = null;
   $('detailView').hidden = true;
   $('upcomingView').hidden = true;
+  $('compareView').hidden = true;
   $('searchView').hidden = false;
   $('detail').innerHTML = '';
   document.title = APP_TITLE;
@@ -309,9 +321,11 @@ function navigate(code) {
 async function showDetail(code) {
   const seq = ++state.detailSeq;
   state.upcomingSeq++;                 // 同上：離開預告頁即丟棄其在途回應
+  state.compareSeq++;
   state.current = null;
   $('searchView').hidden = true;
   $('upcomingView').hidden = true;
+  $('compareView').hidden = true;
   $('detailView').hidden = false;
   const box = $('detail');
 
@@ -398,6 +412,7 @@ function renderDetail() {
     ${meta ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${dash(v)}</dd>`).join('')}</dl>`
     : '<p class="hint">尚無已生效紀錄，描述欄位待生效後顯示。</p>'}
     <p class="hint" style="margin:0.6rem 0 0">品名、成分等描述欄位為來源以現況回填之資料，非各期間當時的名稱。</p>
+    <span class="detail-cmp" data-cmp-slot="${esc(code)}" data-cmp-label="＋加入比較">${compareButtonHTML(code, '＋加入比較')}</span>
     ${tfda || rule || hasUpcoming ? `<div class="links">
       ${tfda ? `<a href="${esc(tfda)}" target="_blank" rel="noopener">TFDA 許可證資料 ↗</a>` : ''}
       ${rule ? `<a href="${esc(rule)}" target="_blank" rel="noopener">健保給付規定（PDF）↗</a>` : ''}
@@ -942,11 +957,275 @@ function showUpcoming() {
   state.today = E.localISODate();      // 每次進入取一次 T，該次檢視內不跨午夜更新（§2）
   $('searchView').hidden = true;
   $('detailView').hidden = true;
+  $('compareView').hidden = true;
   $('detail').innerHTML = '';
   $('upcomingView').hidden = false;
   document.title = `預告中心 — ${APP_TITLE}`;
   renderUpcoming();
   loadUpcoming({ force: true });       // 每次進入都重取：清單很小，且使 §5.5 的「更新失敗」可達
+}
+
+// ── 比較籃（spec-compare.md §3）──────────────────────────────────
+// 序位（1–4）決定顏色與線型，移除後**不重新洗牌**：使用者會記線，洗牌等於換掉他的參照。
+// 狀態存 sessionStorage——比較是一次性任務，不是長期偏好（與搜尋頁的 localStorage 不同）。
+const COMPARE_KEY = 'compareCodes';
+
+function readCompareSession() {
+  try {
+    const raw = sessionStorage.getItem(COMPARE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((x) => x && typeof x.code === 'string' && Number.isInteger(x.slot))
+      .slice(0, E.COMPARE_MAX);
+  } catch {
+    return [];                                   // 無 storage 或內容損毀：本次視為空籃
+  }
+}
+
+function writeCompareSession(items) {
+  try {
+    sessionStorage.setItem(COMPARE_KEY, JSON.stringify(items.map(({ code, slot, valid }) => ({ code, slot, valid }))));
+  } catch { /* 私密模式等：僅本次有效 */ }
+}
+
+/** 最小的未使用序位；空出的序位在下次加入時才重新使用。 */
+function nextSlot(items) {
+  const used = new Set(items.map((x) => x.slot));
+  for (let i = 0; i < E.COMPARE_MAX; i += 1) if (!used.has(i)) return i;
+  return null;
+}
+
+function setCompare(items, { syncUrl = true } = {}) {
+  state.compare.items = items;
+  writeCompareSession(items);
+  if (syncUrl && new URLSearchParams(location.search).get('codes') !== null) {
+    const p = new URLSearchParams(location.search);
+    p.set('codes', E.serializeCompareCodes(items));
+    history.replaceState(history.state, '', `?${p}`);
+  }
+  renderTray();
+  renderCompareEntries();
+}
+
+function compareHas(code) {
+  return state.compare.items.some((x) => x.code === code);
+}
+
+function addCompare(code) {
+  if (compareHas(code) || state.compare.items.length >= E.COMPARE_MAX) return;
+  const slot = nextSlot(state.compare.items);
+  setCompare([...state.compare.items, { code, slot, valid: E.isValidCode(code) }]);
+}
+
+function removeCompare(code) {
+  setCompare(state.compare.items.filter((x) => x.code !== code));
+  if (!$('compareView').hidden) showCompare();       // 比較視圖內移除：依 §3.3 重新決定去向
+}
+
+/** URL 一律優先於 sessionStorage：分享出去的連結不得混入對方自己的籃子。 */
+function restoreCompare() {
+  const parsed = E.parseCompareCodes(location.search);
+  if (new URLSearchParams(location.search).get('codes') !== null) {
+    state.compare.items = parsed.items.map((x, i) => ({ ...x, slot: i }));
+    state.compare.skipped = parsed.skipped;
+    writeCompareSession(state.compare.items);
+  } else {
+    state.compare.items = readCompareSession();
+    state.compare.skipped = 0;
+  }
+  renderTray();
+}
+
+function trayChipHTML(x) {
+  const d = state.byCode?.get(x.code);
+  const name = d ? d.chName : '';
+  return `<span class="tray-chip" data-slot="${x.slot + 1}">
+    <span class="tray-dot" aria-hidden="true"></span>
+    <span class="mono">${esc(x.code)}</span>${name ? `<span class="tray-name">${esc(name)}</span>` : ''}
+    <button type="button" data-action="tray-remove" data-code="${esc(x.code)}"
+            aria-label="移除 ${esc(x.code)}">×</button>
+  </span>`;
+}
+
+function renderTray() {
+  const tray = $('compareTray');
+  const items = state.compare.items;
+  tray.hidden = items.length === 0;
+  if (!items.length) { tray.innerHTML = ''; return; }
+  const ready = items.length >= 2;
+  tray.innerHTML = `<div class="tray-inner">
+    <span class="tray-label">比較籃 ${items.length}/${E.COMPARE_MAX}</span>
+    <div class="tray-chips">${items.map(trayChipHTML).join('')}</div>
+    <div class="tray-actions">
+      ${ready ? '<button type="button" data-action="tray-start">開始比較</button>'
+    : '<span class="hint">再加入 1 個品項即可比較</span>'}
+      <button type="button" class="link-btn" data-action="tray-clear">清空</button>
+    </div>
+  </div>`;
+}
+
+/** 搜尋卡與詳細頁的「＋比較」按鈕狀態（已加入／已滿）。 */
+function compareButtonHTML(code, label = '＋比較') {
+  if (compareHas(code)) return `<button type="button" class="add-cmp" disabled>已加入</button>`;
+  const full = state.compare.items.length >= E.COMPARE_MAX;
+  return `<button type="button" class="add-cmp" data-action="add-compare" data-code="${esc(code)}"
+    ${full ? 'disabled title="最多 4 個，請先移除"' : ''}>${label}</button>`;
+}
+
+/** 加入／移除後就地更新既有的按鈕，不整頁重繪。 */
+function renderCompareEntries() {
+  for (const btn of document.querySelectorAll('[data-cmp-slot]')) {
+    const code = btn.dataset.cmpSlot;
+    btn.innerHTML = compareButtonHTML(code, btn.dataset.cmpLabel || '＋比較');
+  }
+}
+
+// ── 比較視圖：資料載入與狀態（spec-compare.md §2、§6）────────────
+// 取得狀態（§4.3 第一層）：invalid｜loading｜missing｜error｜ok。
+// 「載入失敗」與「查無此代號」必須分開——把失敗說成查無，使用者會以為比較是完整的。
+const COMPARE_STATUS_TEXT = {
+  invalid: '代號格式不正確',
+  loading: '載入中',
+  missing: '查無此代號',
+  error: '資料載入失敗',
+  ok: '',
+};
+
+/** 同片只 fetch 一次；**進行中**的請求也共享，不得因第二個代號而發第二個請求。 */
+function loadShard(prefix) {
+  const cached = state.shardCache.get(prefix);
+  if (cached) return Promise.resolve(cached);
+  let inflight = state.shardInflight.get(prefix);
+  if (!inflight) {
+    inflight = fetchJSON(`data/history/${encodeURIComponent(prefix)}.json`, TIMEOUT.shard)
+      .then((shard) => {
+        state.shardCache.set(prefix, shard);      // 失敗不進快取，必須可重試
+        return shard;
+      })
+      .finally(() => state.shardInflight.delete(prefix));
+    state.shardInflight.set(prefix, inflight);
+  }
+  return inflight;
+}
+
+async function loadCompareData({ only = null } = {}) {
+  const seq = ++state.compareSeq;
+  const items = state.compare.items;
+  const data = only ? state.compareData : new Map();
+  for (const x of items) {
+    if (only && x.code !== only && data.has(x.code)) continue;
+    data.set(x.code, { status: x.valid ? 'loading' : 'invalid', entry: null, error: null });
+  }
+  for (const code of [...data.keys()]) if (!items.some((x) => x.code === code)) data.delete(code);
+  state.compareData = data;
+  state.compareMismatch = false;
+  renderCompare();
+
+  await Promise.all(items.filter((x) => x.valid && (!only || x.code === only)).map(async (x) => {
+    const prefix = E.shardPrefix(x.code, state.meta.shards);
+    if (!prefix) { data.set(x.code, { status: 'missing', entry: null, error: null }); return; }
+    try {
+      const shard = await loadShard(prefix);
+      const v = E.validateShard(shard, state.meta, prefix, x.code);
+      if (v.reason === 'version_mismatch') {
+        // 混批一律整頁不組合（非部分降級）：快取命中時也要比對版本
+        state.shardCache.delete(prefix);
+        state.compareMismatch = true;
+        data.set(x.code, { status: 'error', entry: null, error: '資料版本不一致' });
+      } else if (v.reason === 'missing_code') {
+        data.set(x.code, { status: 'missing', entry: null, error: null });
+      } else if (!v.ok) {
+        data.set(x.code, { status: 'error', entry: null, error: '分片內容不合法' });
+      } else {
+        data.set(x.code, { status: 'ok', entry: shard.drugs[x.code], error: null });
+      }
+    } catch (e) {
+      data.set(x.code, { status: 'error', entry: null, error: e.message });
+    }
+  }));
+  if (seq !== state.compareSeq) return;           // 使用者已改選：丟棄本回應
+  renderCompare();
+}
+
+/** §6.1「完整成功」＝所有選定代號皆已取得有效且版本一致的資料。 */
+function compareComplete() {
+  const items = state.compare.items;
+  return items.length >= 2 && !state.compareMismatch
+    && items.every((x) => state.compareData.get(x.code)?.status === 'ok');
+}
+
+function compareBannerHTML() {
+  if (state.compareMismatch) {
+    return '<div class="alert alert--error">資料已更新，請重新整理頁面。'
+      + '<button type="button" data-action="reload">重新整理</button></div>';
+  }
+  const failed = state.compare.items.filter((x) => state.compareData.get(x.code)?.status === 'error');
+  if (!failed.length) return '';
+  return `<div class="alert alert--error">以下品項的資料載入失敗：
+    <span class="mono">${failed.map((x) => esc(x.code)).join('、')}</span>
+    <button type="button" data-action="compare-retry">重試</button></div>`;
+}
+
+function renderCompare() {
+  if ($('compareView').hidden) return;
+  const items = state.compare.items;
+  $('compareBanner').innerHTML = compareBannerHTML();
+  $('compareSkipped').textContent = state.compare.skipped
+    ? `已略過 ${state.compare.skipped} 個超出上限的代號。` : '';
+
+  if (state.compareMismatch) { $('compareBody').innerHTML = ''; return; }
+  // 選定集合的每一個代號都要被交代，含異常者（§6.1）
+  $('compareBody').innerHTML = `<ul class="compare-codes">${items.map((x) => {
+    const d = state.compareData.get(x.code) || { status: 'loading' };
+    const drug = state.byCode?.get(x.code);
+    const name = d.status === 'ok' ? (E.selectMeta(d.entry, state.today)?.chName ?? drug?.chName ?? '') : '';
+    return `<li class="compare-code" data-code="${esc(x.code)}" data-slot="${x.slot + 1}" data-status="${d.status}">
+      <span class="tray-dot" aria-hidden="true"></span>
+      <span class="mono">${esc(x.code)}</span>
+      <span class="compare-name">${esc(name)}</span>
+      <span class="compare-state">${esc(COMPARE_STATUS_TEXT[d.status])}</span>
+      <button type="button" class="link-btn" data-action="tray-remove" data-code="${esc(x.code)}">移除</button>
+    </li>`;
+  }).join('')}</ul>`;
+}
+
+function showCompare() {
+  state.detailSeq++;
+  state.upcomingSeq++;
+  state.current = null;
+  restoreCompare();
+  const items = state.compare.items;
+
+  // §3.3：清單長度（含異常項目）決定去向，不以「有效碼數」判定
+  if (items.length === 1 && items[0].valid) {
+    const code = items[0].code;
+    setCompare([], { syncUrl: false });
+    history.replaceState(history.state, '', `?code=${encodeURIComponent(code)}`);
+    state.compareNotice = '比較需要 2 個以上品項，已為你開啟單品項頁。';
+    showDetail(code);
+    renderBanners();
+    return;
+  }
+  $('searchView').hidden = true;
+  $('detailView').hidden = true;
+  $('upcomingView').hidden = true;
+  $('compareView').hidden = false;
+  document.title = `多代號比較 — ${APP_TITLE}`;
+  state.today = E.localISODate();          // 一次比較共用同一個 T，進入時取得一次（§4.4）
+
+  if (items.length === 0) {
+    $('compareBanner').innerHTML = '';
+    $('compareSkipped').textContent = '';
+    $('compareBody').innerHTML = '<div class="card"><p>代號皆無資料。請回<a href="./" data-action="to-search">搜尋頁</a>重新選擇品項。</p></div>';
+    history.replaceState(history.state, '', location.pathname);
+    return;
+  }
+  if (state.core !== 'ready') {
+    $('compareBody').innerHTML = coreMessageHTML();
+    return;
+  }
+  loadCompareData();
 }
 
 // ── 事件 ────────────────────────────────────────────────────────
@@ -983,6 +1262,25 @@ function bind() {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       navigate(el.dataset.code);
+    } else if (action === 'add-compare') {
+      e.preventDefault();
+      addCompare(el.dataset.code);
+    } else if (action === 'tray-remove') {
+      e.preventDefault();
+      removeCompare(el.dataset.code);
+    } else if (action === 'tray-clear') {
+      e.preventDefault();
+      setCompare([], { syncUrl: false });
+      if (!$('compareView').hidden) { history.pushState(null, '', location.pathname); showSearch(); }
+    } else if (action === 'tray-start') {
+      e.preventDefault();
+      history.pushState({ fromSearch: true }, '', `?codes=${encodeURIComponent(E.serializeCompareCodes(state.compare.items))}`);
+      showCompare();
+      window.scrollTo(0, 0);
+    } else if (action === 'compare-retry') {
+      for (const x of state.compare.items) {
+        if (state.compareData.get(x.code)?.status === 'error') loadCompareData({ only: x.code });
+      }
     } else if (action === 'upcoming-csv') {
       exportUpcomingCSV();
     } else if (action === 'retry-upcoming') {
@@ -1028,6 +1326,7 @@ try {
   if (localStorage.getItem('showTerminated') === '1') $('showTerminated').checked = true;
 } catch { /* 無 storage */ }
 bind();
+restoreCompare();
 loadCore();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {

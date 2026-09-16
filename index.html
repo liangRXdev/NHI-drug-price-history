@@ -46,6 +46,20 @@
       <div id="detail" aria-live="polite"></div>
     </section>
 
+    <section id="compareView" hidden aria-labelledby="compareTitle">
+      <p class="back"><a href="./" data-action="to-search">← 回搜尋</a></p>
+      <div class="card">
+        <h2 id="compareTitle">多代號比較</h2>
+        <p class="hint">
+          本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。
+          不同健保代號代表不同給付品項；並列呈現不表示品項可互相替代，亦不構成任何採購或換藥建議。
+        </p>
+        <div id="compareBanner"></div>
+        <p id="compareSkipped" class="search-status"></p>
+        <div id="compareBody" aria-live="polite"></div>
+      </div>
+    </section>
+
     <section id="upcomingView" hidden aria-labelledby="upcomingTitle">
       <p class="back"><a href="./" data-action="to-search">← 回搜尋</a></p>
       <div class="card">
@@ -92,6 +106,8 @@
     <h2 id="sourceTitle">資料來源與更新時間</h2>
     <dl id="sourceInfo" class="facts"><dt>狀態</dt><dd>載入中…</dd></dl>
   </section>
+
+  <div id="compareTray" class="tray" hidden aria-label="比較籃"></div>
 
   <p class="disclaimer">
     本系統顯示中央健康保險署公告之健保支付價，不代表醫療院所實際採購價、零售價或病人自付金額。
