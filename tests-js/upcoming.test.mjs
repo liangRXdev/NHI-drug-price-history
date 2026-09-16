@@ -233,20 +233,42 @@ const csvOf = (search = '', today = '2026-09-11') => {
   return { text: upcomingCSV(model.rows, { buildDate: '2026-09-11', params, today }), model, params };
 };
 
-test('U12 檔案結構：BOM、前言一行、標頭一行，資料列與篩選結果逐列對應', () => {
+// U12 要求「逐列逐欄」：完整 16 欄預期矩陣，逐值比對。只比其中幾欄時，
+// 「所有列都重複第一筆」「暫停續期前價全省略」這類弱化實作照樣會綠
+const EXPECTED_CSV = [
+  ['2026-10-01', 'Q000000001', '含,逗號與"引號"的品名', 'LINE1\nLINE2', '', '10 MG', '錠劑',
+    'A01AA01', '測試藥廠', '調升', '10.00', '12.50', '2.50', '25.00', '12.50', ''],
+  ['2026-10-01', 'Q000000002', '零元藥', 'TEST', '', '', '', '', '', '終止支付',
+    '245.00', '', '', '', '0.00', '描述欄位不一致'],
+  ['2026-11-01', 'Q000000003', '暫停藥半形', 'TEST', '', '', '', '', '', '暫停支付',
+    '18.00', '', '', '', '-', ''],
+  ['2026-11-01', 'Q000000004', '暫停藥全形', 'TEST', '', '', '', '', '', '暫停支付續期',
+    '18.00', '', '', '', '－', ''],
+  ['2026-11-01', 'Q000000005', '暫停藥破折號', 'TEST', '', '', '', '', '', '暫停支付續期',
+    '18.00', '', '', '', '—', ''],
+  ['2026-12-01', 'Q000000006', '', '', '', '', '', '', '', '來源無支付價資料',
+    '', '', '', '', '', ''],
+];
+
+test('U12 檔案結構：BOM、前言一行、標頭一行，資料列逐列逐欄對應', () => {
   const { text, model } = csvOf();
   assert.ok(text.startsWith('﻿'), '缺 BOM');
   const rows = parseCSV(text.slice(1));
-  assert.equal(rows.length, model.rows.length + 2);
+  assert.equal(rows.length, model.rows.length + 2);          // 資料列數排除前言與標頭
   assert.match(rows[0][0], /^健保藥價歷史查詢 — 預告清單匯出。/);
   assert.equal(rows[0].length, 1);
   assert.deepEqual(rows[1], UPCOMING_CSV_HEADER);
+  assert.deepEqual(rows.slice(2), EXPECTED_CSV);             // 順序、重數與每一欄的值
+  assert.deepEqual(rows.slice(2).map((r) => r[1]), model.rows.map((r) => r.it.code));
+});
 
-  const data = rows.slice(2);
-  assert.deepEqual(data.map((r) => r[1]), model.rows.map((r) => r.it.code));      // 順序與重數
-  assert.deepEqual(data.map((r) => r[0]), model.rows.map((r) => r.it.effectiveDate));
-  assert.deepEqual(data.map((r) => r[9]), model.rows.map((r) => r.dec.label));
-  assert.deepEqual(data.map((r) => r[14]), model.rows.map((r) => r.it.rawPrice));
+test('U12 排序後匯出，列序與畫面一致', () => {
+  const { text } = csvOf('?sort=date_desc');
+  const data = parseCSV(text.slice(1)).slice(2);
+  assert.deepEqual(data.map((r) => r[1]),
+    ['Q000000006', 'Q000000003', 'Q000000004', 'Q000000005', 'Q000000001', 'Q000000002']);
+  assert.deepEqual(data.find((r) => r[1] === 'Q000000004'),
+    EXPECTED_CSV.find((r) => r[1] === 'Q000000004'));       // 換序不得改變欄位內容
 });
 
 test('U12 原始支付價字串逐字保真（12.50 不變 12.5、0.00 不變 0、三種暫停標記）', () => {

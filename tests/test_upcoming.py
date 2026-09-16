@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # 預告列上取自 record 的欄位；描述欄位另由 U3 驗（來源是 build 日有效列，不是預告列）
 RECORD_FIELDS = ("effectiveDate", "endDate", "price", "rawPrice", "priceState", "eventType",
-                 "previousPrice", "absoluteChange", "percentChange", "crossesStop")
+                 "previousPrice", "absoluteChange", "percentChange", "crossesStop",
+                 "previousState", "pricedBefore", "everPriced")
 META_FIELDS = history.INDEX_META_FIELDS
 
 
@@ -51,14 +52,21 @@ def test_u1_items_correspond_to_every_future_record_in_history():
     expected = []
     for shard in shards.values():
         for code, entry in shard.items():
-            for rec in entry["records"]:
+            # previousState／pricedBefore／everPriced 由 shard 的 records 自行推導，
+            # 不向待驗的 build_upcoming() 借（U1：預期值不得由待驗生成器產生）
+            last_priced = None
+            for i, rec in enumerate(entry["records"]):
                 if rec["from"] > D.isoformat():
                     expected.append((
                         code, rec["from"], rec["to"], rec["price"], rec["rawPrice"],
                         rec["priceState"], rec["eventType"], rec["previousPrice"],
                         rec["absoluteChange"], rec["percentChange"], rec["crossesStop"],
+                        entry["records"][i - 1]["priceState"] if i else None,
+                        last_priced, last_priced is not None,
                         tuple(sorted(set(rec["flags"]) | set(entry["flags"]))),
                     ))
+                if rec["priceState"] == "priced":
+                    last_priced = rec["price"]
 
     assert expected, "凍結快照必須含未生效列，否則本測試等於沒執行"
     assert Counter(shape(it) for it in items) == Counter(expected)

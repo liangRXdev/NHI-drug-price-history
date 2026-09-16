@@ -325,6 +325,45 @@ SNAPSHOT_UPCOMING = [("AB47689100", "2026-10-01", "7.90", "increase"),
                      ("BC05037209", "2026-10-01", "0.00", "terminated"),
                      ("BC26467100", "2026-10-01", "0", "terminated")]
 
+# 凍結快照在 D = 2026-09-11 的**完整**預期 items（16 個欄位全列）。
+# 每個金額都對得上藥師已核對的 golden fixture：BC05037209 245.00 → 0（終止）、
+# AB47689100 6.90 → 7.90（+14.49%）、BC26467100 7.40 → 0，描述欄位取自 build 日有效列。
+EXPECTED_UPCOMING = [
+    {
+        "code": "AB47689100", "chName": "癲合膜衣錠300毫克",
+        "enName": "Neurtrol F.C. Tablets 300mg", "ingredient": "OXCARBAZEPINE 300 MG",
+        "strength": "", "strengthUnit": "", "dosageForm": "膜衣錠", "atcCode": "N03AF02",
+        "manufacturer": "健亞生物科技股份有限公司",
+        "effectiveDate": "2026-10-01", "endDate": None, "eventType": "increase",
+        "priceState": "priced", "price": 7.9, "rawPrice": "7.90", "previousPrice": 6.9,
+        "pricedBefore": 6.9, "previousState": "priced", "absoluteChange": 1.0,
+        "percentChange": 14.49, "crossesStop": False, "everPriced": True, "flags": [],
+    },
+    {
+        "code": "BC05037209", "chName": '"隆柏" 福祿安持續性注射液',
+        "enName": "FLUANXOL DEPOT 1ML", "ingredient": "FLUPENTIXOL DECANOATE 20 MG/ML",
+        "strength": "1", "strengthUnit": "ML", "dosageForm": "注射劑", "atcCode": "N05AF01",
+        "manufacturer": "禾利行股份有限公司",
+        "effectiveDate": "2026-10-01", "endDate": None, "eventType": "terminated",
+        "priceState": "terminated", "price": None, "rawPrice": "0.00", "previousPrice": 245.0,
+        "pricedBefore": 245.0, "previousState": "priced", "absoluteChange": None,
+        "percentChange": None, "crossesStop": False, "everPriced": True, "flags": [],
+    },
+    {
+        "code": "BC26467100", "chName": "力脈樂10/160/12.5毫克膜衣錠",
+        "enName": "Dafiro HCT 10/160/12.5mg Film-Coated Tablets",
+        "ingredient": "VALSARTAN 160 MG+AMLODIPINE BESYLATE 10 MG+HYDROCHLOROTHIAZIDE 12.5 MG",
+        "strength": "", "strengthUnit": "", "dosageForm": "膜衣錠", "atcCode": "C09DX01",
+        "manufacturer": "裕利股份有限公司",
+        "effectiveDate": "2026-10-01", "endDate": None, "eventType": "terminated",
+        "priceState": "terminated", "price": None, "rawPrice": "0", "previousPrice": 7.4,
+        "pricedBefore": 7.4, "previousState": "priced", "absoluteChange": None,
+        "percentChange": None, "crossesStop": False, "everPriced": True,
+        "flags": ["inconsistent_metadata"],
+    },
+]
+
+
 
 def test_u5_independent_builds_are_byte_identical(tmp_path):
     """來源列順序不同、固定 D → 位元組相同，且內容正確（不是兩次都空）。"""
@@ -400,7 +439,7 @@ def test_u7a_unchanged_source_without_crossing_keeps_upcoming_untouched(tmp_path
     result = build(tmp_path, checked_at="2026-09-18T02:00:00+08:00")
     assert result["changed"] is False
     assert changed_files(before, snapshot_files(tmp_path)) == {"status.json"}
-    assert brief(read_upcoming(tmp_path)) == SNAPSHOT_UPCOMING
+    assert read_upcoming(tmp_path)["items"] == EXPECTED_UPCOMING        # 完整內容，非摘要
 
 
 def test_u7a_crossing_effective_date_removes_the_row_that_took_effect(tmp_path):
@@ -409,7 +448,7 @@ def test_u7a_crossing_effective_date_removes_the_row_that_took_effect(tmp_path):
     只改 buildDate／版本而沒移除該列的實作，會被日期與完整內容斷言擋下。
     """
     build(tmp_path, build_date=date(2026, 9, 11))
-    assert brief(read_upcoming(tmp_path)) == SNAPSHOT_UPCOMING
+    assert read_upcoming(tmp_path)["items"] == EXPECTED_UPCOMING
     before = snapshot_files(tmp_path)
 
     result = build(tmp_path, build_date=date(2026, 10, 1),
@@ -424,14 +463,24 @@ def test_u7a_crossing_effective_date_removes_the_row_that_took_effect(tmp_path):
 def test_u7a_changed_source_updates_upcoming_content(tmp_path):
     rows = nhi.parse_csv(SNAPSHOT.read_bytes())
     build(tmp_path, raw=rows_to_csv(rows))
-    next(r for r in rows if r["code"] == "AB47689100" and r["from"] == "1151001")["to"] = "1151231"
-    rows.append(make_row(code="AB47689100", price="6.00", frm="1160101", to="9991231"))
+    upcoming_row = next(r for r in rows if r["code"] == "AB47689100" and r["from"] == "1151001")
+    upcoming_row["to"] = "1151231"
+    # 複製既有列再改價格與區間：描述欄位保持一致，否則會多一個 inconsistent_metadata flag
+    rows.append({**upcoming_row, "price": "6.00", "from": "1160101", "to": "9991231"})
     build(tmp_path, raw=rows_to_csv(rows), checked_at="2026-09-18T02:00:00+08:00")
-    assert brief(read_upcoming(tmp_path)) == [
-        ("AB47689100", "2026-10-01", "7.90", "increase"),
-        ("BC05037209", "2026-10-01", "0.00", "terminated"),
-        ("BC26467100", "2026-10-01", "0", "terminated"),
-        ("AB47689100", "2027-01-01", "6.00", "decrease")]
+    items = read_upcoming(tmp_path)["items"]
+    # 前三列必須與來源未變時**逐欄相同**：只有新增的那一列是差異
+    first = dict(EXPECTED_UPCOMING[0], endDate="2026-12-31")             # 該列被關上迄日
+    assert items[:3] == [first, EXPECTED_UPCOMING[1], EXPECTED_UPCOMING[2]]
+    assert items[3] == {
+        **{k: EXPECTED_UPCOMING[0][k] for k in
+           ("code", "chName", "enName", "ingredient", "strength", "strengthUnit",
+            "dosageForm", "atcCode", "manufacturer")},
+        "effectiveDate": "2027-01-01", "endDate": None, "eventType": "decrease",
+        "priceState": "priced", "price": 6.0, "rawPrice": "6.00", "previousPrice": 7.9,
+        "pricedBefore": 7.9, "previousState": "priced", "absoluteChange": -1.9,
+        "percentChange": -24.05, "crossesStop": False, "everPriced": True, "flags": [],
+    }
 
 
 # ── U7b 首次交付與版本遷移（§3.3.1）────────────────────────────
