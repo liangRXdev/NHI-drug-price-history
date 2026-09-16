@@ -524,6 +524,44 @@ def test_u7b_failed_migration_is_retried_next_run(tmp_path, monkeypatch):
     assert changed and "data/upcoming.json" in staged
 
 
+def test_u7b_working_tree_residue_is_not_publication(tmp_path):
+    """工作目錄有產物、但已發布版本沒有 → 仍須視為未完成的首次交付。
+
+    只看檔案存在的實作會在這裡靜默跳過遷移：產物永遠留在工作目錄，功能上線即空。
+    """
+    repo = git_repo_with_data(tmp_path)
+    (repo / "data" / UPCOMING).unlink()
+    git(repo, "commit", "-qam", "remove upcoming")          # 已發布版本沒有 upcoming.json
+    build(repo / "data", checked_at="2026-09-18T02:00:00+08:00")   # 產出但先不 commit
+    assert (repo / "data" / UPCOMING).exists()
+
+    result = build(repo / "data", checked_at="2026-09-25T02:00:00+08:00")
+    assert result["upcomingMigration"] is True             # 殘留檔不算已發布
+    changed, staged = enters_changed_branch(repo)
+    assert changed and "data/upcoming.json" in staged and "data/meta.json" in staged
+
+
+def test_u7b_published_meta_without_upcoming_stats_is_incomplete(tmp_path):
+    """產物已發布但 meta 缺 upcoming 統計 → 仍屬未完成，下次 build 必須補齊。
+
+    §3.3.1 的完成定義是「經驗證的產物與 meta 已同批進入 commit」。少了這一條，
+    來源不變時 generatorVersion 已相符，meta 統計就永遠補不回來。
+    """
+    repo = git_repo_with_data(tmp_path)
+    meta_path = repo / "data" / "meta.json"
+    meta = json.loads(meta_path.read_text("utf-8"))
+    for key in ("upcomingRows", "upcomingCodes"):
+        meta.pop(key)
+    meta_path.write_bytes(bph.dumps(meta))
+    git(repo, "commit", "-qam", "meta without upcoming stats")
+
+    result = build(repo / "data", checked_at="2026-09-18T02:00:00+08:00")
+    assert result["upcomingMigration"] is True
+    changed, staged = enters_changed_branch(repo)
+    assert changed and "data/meta.json" in staged
+    assert json.loads(meta_path.read_text("utf-8"))["upcomingRows"] == 3
+
+
 def test_u7b_steady_state_is_not_treated_as_migration(tmp_path):
     """反向哨兵：已有同版本產物、來源未變 → 不得每次都當成遷移重推。"""
     repo = git_repo_with_data(tmp_path)

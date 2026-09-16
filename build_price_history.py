@@ -22,6 +22,7 @@ import gzip
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -242,6 +243,29 @@ def read_json(path):
         return None
 
 
+def published_json(data_dir, name):
+    """**已發布版本**（HEAD 的內容）的 JSON；沒發布過回 None。
+
+    判定對象必須是已發布版本而不是工作目錄（spec-upcoming §3.3.1）：工作目錄可能
+    留著上一次產出但沒進 commit 的檔案，只看檔案存在會把「產出了但沒發布」誤判成
+    已完成，功能就永遠上線即空。不在 git 工作區時（本機實驗、測試 tmp 目錄）退回讀檔。
+    """
+    data_dir = Path(data_dir)
+    if not data_dir.exists():
+        return None
+    git = ["git", "-C", str(data_dir)]
+    try:
+        inside = subprocess.run([*git, "rev-parse", "--git-dir"], capture_output=True)
+        if inside.returncode != 0:
+            return read_json(data_dir / name)          # 非 git 工作區：只能以檔案為準
+        shown = subprocess.run([*git, "show", f"HEAD:./{name}"], capture_output=True)
+        if shown.returncode != 0:
+            return None                                 # 已發布版本沒有這個檔案
+        return json.loads(shown.stdout.decode("utf-8"))
+    except (OSError, ValueError):
+        return read_json(data_dir / name)
+
+
 def existing_data_files(data_dir):
     files = {}
     index = Path(data_dir) / "drug_index.json"
@@ -314,12 +338,19 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
 
     existing = existing_data_files(data_dir)
     changed = existing != files
-    # 首次交付與生成規則遷移（spec-upcoming §3.3.1）：判定對象是已發布版本。
+    # 首次交付與生成規則遷移（spec-upcoming §3.3.1）：判定對象是**已發布版本**。
     # 必須強制進入有差異批次，否則新產物只會留在工作目錄裡進不了 commit，
     # 功能上線即空。失敗時不寫任何檔案，下次執行仍會重新判定為未完成。
-    prev_upcoming = read_json(Path(data_dir) / "upcoming.json")
-    migration = (not isinstance(prev_upcoming, dict)
-                 or prev_upcoming.get("generatorVersion") != history.UPCOMING_GENERATOR_VERSION)
+    published_upcoming = published_json(data_dir, "upcoming.json")
+    published_meta = published_json(data_dir, "meta.json")
+    migration = (
+        not isinstance(published_upcoming, dict)
+        or published_upcoming.get("generatorVersion") != history.UPCOMING_GENERATOR_VERSION
+        # 完成的定義是「產物與 meta 同批進入 commit」：meta 少了 upcoming 統計，
+        # 代表上次只發了一半，仍視為未完成（否則來源不變就永遠補不回來）
+        or not isinstance(published_meta, dict)
+        or "upcomingRows" not in published_meta
+    )
     if migration:
         changed = True
     meta_bytes = None

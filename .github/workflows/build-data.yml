@@ -57,8 +57,10 @@ jobs:
           # 無變動時仍單獨 commit，讓前端能區分「官方沒更新」與「建置壞了」。
           # upcoming.json 與 index 同進退（spec-upcoming §3.3），但首次交付與生成
           # 規則遷移時 index 可能完全沒變，必須靠它讓本次進入有差異分支，否則新
-          # 產物留在工作目錄裡進不了 commit，功能上線即空（§3.3.1）
-          if git diff --staged --quiet -- data/drug_index.json data/history data/upcoming.json; then
+          # 產物留在工作目錄裡進不了 commit，功能上線即空（§3.3.1）。
+          # meta.json 同理：它只在有差異批次才被寫入，但「補齊 meta 統計」這種
+          # 修復批次可能只有 meta 變動，不列進來就會被判成無差異而漏 commit
+          if git diff --staged --quiet -- data/drug_index.json data/history data/upcoming.json data/meta.json; then
             git reset -q
             git add data/status.json
             msg="chore(data): 例行檢查，資料無變動 $(TZ=Asia/Taipei date +%F)"
