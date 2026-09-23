@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  chartModel, currentLabel, dayNumber, decimalChange, isEffective, latestEventLabel, MAX_RESULTS, prepareIndex,
+  chartModel, currentLabel, dayNumber, decimalChange, INDEX_FIELDS, INDEX_FORMAT, INDEX_WINDOW_FIELDS,
+  IndexShapeError, isEffective, latestEventLabel, MAX_RESULTS, prepareIndex,
   priorPrices, search, searchCard, selectMeta, shardPrefix, staleness, stateLabel, summaryAt, terminatedMask, totalChangeLabel,
   upcomingLabel, validateIndex, validateMeta, validateShard,
 } from '../engine.js';
@@ -22,6 +23,41 @@ function rec(from, to, rawPrice, eventType, extra = {}) {
   };
 }
 const win = (r, pricedBefore, flags = r.flags) => ({ ...r, pricedBefore, flags });
+
+/**
+ * 測試用：把簡化的 drug 物件補齊 mandatory 欄位後轉成 columnar/1。
+ *
+ * 這些測試關心的是搜尋與篩選**行為**，不是表示法本身——表示法的正確性由
+ * scripts/verify_equivalence.mjs（F1／F2）與轉換器自檢（F4）負責。
+ * 補齊用的預設值只求通過型別驗證，不代表真實資料分布。
+ */
+function asColumnar(drugs) {
+  const D = {
+    code: '', chName: '', enName: '', ingredient: '', dosageForm: '', strength: '',
+    strengthUnit: '', atcCode: '', manufacturer: '', firstEffectiveDate: '2020-01-01',
+    lastPriceChangeDate: null, historyCount: 0, priceChangeCount: 0, flags: [],
+  };
+  const W = {
+    from: '2020-01-01', to: null, price: null, rawPrice: '', previousPrice: null,
+    pricedBefore: null, priceState: 'missing', eventType: 'initial', crossesStop: false,
+    changeFlag: '', absoluteChange: null, percentChange: null, flags: [],
+  };
+  const rows = drugs.map((d0) => {
+    const d = { ...D, ...d0 };
+    const w = (d0.window || []).map((r0) => {
+      const r = { ...W, ...r0 };
+      return INDEX_WINDOW_FIELDS.map((k) => r[k]);
+    });
+    return [...INDEX_FIELDS.map((k) => d[k]), w];
+  });
+  return {
+    dataVersion: 'sha256:test', indexFormat: INDEX_FORMAT,
+    fields: [...INDEX_FIELDS], windowFields: [...INDEX_WINDOW_FIELDS], rows,
+  };
+}
+
+/** prepared 的第 i 筆代號——columnar 下沒有 prepared.drugs 陣列可直接取 */
+const codeAt = (p, i) => p.drugAt(i).code;
 
 // 依 spec §5.1（lib/history.py build_window）由完整 history 組 build 日 D 的 window，
 // 讓搜尋卡與詳細頁吃同一份 history，測試「build 後日期移動」的情境。
@@ -365,14 +401,18 @@ test('C3 無法解析 → 紅', () => {
 
 // ── C4 搜尋 ─────────────────────────────────────────────────────
 function makeIndex() {
-  const drugs = [];
+  // 代號必須嚴格遞增且唯一（§3.5）。原本的 `AC48${i}100` 在 i=92 會產生
+  // AC48092100，與下方特意加入的那筆**重複**——舊版 prepareIndex 的 fallback sort
+  // 讓這個 fixture bug 一直沒有顯形。改用 AC4809xxxx 讓候選與目標自然遞增。
+  // 目標排在候選**之前**：rows 依 code 遞增，而 prefix bucket 只留前 MAX_RESULTS 筆，
+  // 目標若排在 120 筆候選之後會被擠掉（舊 fixture 靠重複代號＋fallback sort 巧合閃過）
+  const drugs = [{ code: 'AC48092100', chName: '"衛采" 撫緒錠', enName: 'CAREMOD TABLETS', ingredient: 'PAROXETINE HCL' }];
   for (let i = 0; i < 120; i++) {
-    const code = `AC48${String(i).padStart(3, '0')}100`;
+    const code = `AC4809${String(i + 3000).padStart(4, '0')}`;
     drugs.push({ code, chName: `候選藥${i}`, enName: `CANDIDATE ${i}`, ingredient: 'AC4809 LOOKALIKE' });
   }
-  drugs.push({ code: 'AC48092100', chName: '"衛采" 撫緒錠', enName: 'CAREMOD TABLETS', ingredient: 'PAROXETINE HCL' });
   drugs.push({ code: 'ZZ99999999', chName: '終止藥品', enName: 'ENDED', ingredient: 'OLDINE', window: [] });
-  return prepareIndex(drugs);
+  return prepareIndex(asColumnar(drugs));
 }
 
 test('C4 代號完全相符排第一，即使有 > 50 筆候選', () => {
@@ -400,16 +440,23 @@ test('C4 空白查詢 → null；不存在 → 空；跨欄位邊界不得誤中
 
 test('C4 符合項位於全資料第 50 筆之後仍可找到', () => {
   const idx = makeIndex();
-  const pos = idx.drugs.findIndex((d) => d.code === 'ZZ99999999');
+  let pos = -1;
+  for (let i = 0; i < idx.n; i++) if (codeAt(idx, i) === 'ZZ99999999') { pos = i; break; }
   assert.ok(pos > 50);
   assert.equal(search(idx, 'ended').items[0].code, 'ZZ99999999');
 });
 
-test('C4 未排序的 index 仍依代號排序；已排序時不改動原陣列', () => {
-  const drugs = [{ code: 'B2' }, { code: 'A1' }, { code: 'A10' }].map((d) => ({ chName: '', enName: '', ingredient: '', ...d }));
-  const p = prepareIndex(drugs);
-  assert.deepEqual(p.drugs.map((d) => d.code), ['A1', 'A10', 'B2']);
-  assert.deepEqual(drugs.map((d) => d.code), ['B2', 'A1', 'A10']);
+test('C4 未排序的 index 是資料違約，不得靜默修正', () => {
+  // 〔不變量變更〕舊版 prepareIndex 會對未排序的 drugs 做 fallback sort。
+  // columnar/1 把「rows 依 code 嚴格遞增」寫成契約（spec-index-format.md §3.5）：
+  // 靜默排序會讓一次 45,179 筆的 sort 留在首屏路徑上，且掩蓋建置端的錯誤。
+  // 改為拒絕——搜尋不可用比悄悄用錯的順序安全。
+  assert.throws(() => prepareIndex(asColumnar([{ code: 'B2' }, { code: 'A1' }, { code: 'A10' }])),
+    IndexShapeError);
+  // 重複代號同樣違約
+  assert.throws(() => prepareIndex(asColumnar([{ code: 'A1' }, { code: 'A1' }])), IndexShapeError);
+  // 已排序者正常運作
+  const p = prepareIndex(asColumnar([{ code: 'A1' }, { code: 'A10' }, { code: 'B2' }]));
   assert.deepEqual(search(p, 'a1').items.map((d) => d.code), ['A1', 'A10']);
 });
 
@@ -427,13 +474,15 @@ function filterIndex() {
     mk('F000000006', [win(rec('2020-01-01', null, '0.00', 'terminated'), 10, ['conflict'])]),          // 衝突：不藏
     mk('F000000007', [win(rec('2020-01-01', '2021-12-31', '5.00', 'initial'), null)]),                 // window 耗盡：不藏
   ];
-  const p = prepareIndex(drugs);
+  const p = prepareIndex(asColumnar(drugs));
   return { p, mask: terminatedMask(p, T) };
 }
 
 test('篩選：只藏 T 當日確定為 0 元的品項；暫停／預告終止／衝突／耗盡不藏', () => {
   const { p, mask } = filterIndex();
-  assert.deepEqual(p.drugs.filter((_, i) => mask[i]).map((d) => d.code), ['F000000002', 'F000000003']);
+  const masked = [];
+  for (let i = 0; i < p.n; i++) if (mask[i]) masked.push(codeAt(p, i));
+  assert.deepEqual(masked, ['F000000002', 'F000000003']);
   const r = search(p, 'filterine', mask);
   assert.equal(r.total, 5);
   assert.equal(r.hidden, 2);
@@ -443,7 +492,7 @@ test('篩選：只藏 T 當日確定為 0 元的品項；暫停／預告終止�
 
 test('篩選：代號完全相符一律顯示；前綴仍受篩選', () => {
   const { p, mask } = filterIndex();
-  assert.deepEqual(search(p, 'F000000002', mask), { total: 1, hidden: 0, items: [p.drugs[1]] });
+  assert.deepEqual(search(p, 'F000000002', mask), { total: 1, hidden: 0, items: [p.drugAt(1)] });
   const pre = search(p, 'F00000000', mask);
   assert.equal(pre.hidden, 2);
   assert.ok(!pre.items.some((d) => d.code === 'F000000002'));
@@ -452,7 +501,9 @@ test('篩選：代號完全相符一律顯示；前綴仍受篩選', () => {
 test('篩選：遮罩依日期而定（預告終止生效後才藏）', () => {
   const { p } = filterIndex();
   const mask = terminatedMask(p, '2026-10-01');
-  assert.equal(mask[p.drugs.findIndex((d) => d.code === 'F000000005')], true);
+  let i5 = -1;
+  for (let i = 0; i < p.n; i++) if (codeAt(p, i) === 'F000000005') { i5 = i; break; }
+  assert.equal(mask[i5], true);
 });
 
 // ── A8／E6 分片與混批 ───────────────────────────────────────────
@@ -466,8 +517,26 @@ test('shardPrefix 以最長符合前綴選檔，不寫死長度', () => {
 test('E6 混批：index↔meta、shard↔meta 版本不一致 → version_mismatch', () => {
   const meta = { dataVersion: 'v1', shards: { files: ['AC48'], versions: { AC48: 's1' } } };
   assert.ok(validateMeta(meta).ok);
-  assert.equal(validateIndex({ dataVersion: 'v2', drugs: [] }, meta).reason, 'version_mismatch');
-  assert.ok(validateIndex({ dataVersion: 'v1', drugs: [] }, meta).ok);
+  const idx = (dataVersion, extra = {}) => ({
+    dataVersion, indexFormat: INDEX_FORMAT,
+    fields: [...INDEX_FIELDS], windowFields: [...INDEX_WINDOW_FIELDS],
+    rows: [['A1', '', '', '', '', '', '', '', '', '2020-01-01', null, 0, 0, [], []]],
+    ...extra,
+  });
+  const meta1 = { ...meta, uniqueDrugCodeCount: 1 };
+  assert.equal(validateIndex(idx('v2'), meta1).reason, 'version_mismatch');
+  assert.ok(validateIndex(idx('v1'), meta1).ok);
+  // 表示法不符 → mismatch（可自癒，「請重新整理」），不是 invalid（「無法查詢」）
+  assert.equal(validateIndex(idx('v1', { indexFormat: 'columnar/0' }), meta1).reason, 'version_mismatch');
+  assert.equal(validateIndex({ dataVersion: 'v1', drugs: [] }, meta1).reason, 'invalid');
+  // 最小結構前提排在版本判定之前：null／陣列不得被誤歸成版本問題
+  for (const bad of [null, [], 'x', { indexFormat: INDEX_FORMAT }]) {
+    assert.equal(validateIndex(bad, meta1).reason, 'invalid');
+  }
+  // 空 rows 是資料故障，不得偽裝成零結果（§3.5）
+  assert.equal(validateIndex(idx('v1', { rows: [] }), meta1).reason, 'invalid');
+  // rows 數與 meta.uniqueDrugCodeCount 不符
+  assert.equal(validateIndex(idx('v1'), { ...meta, uniqueDrugCodeCount: 999 }).reason, 'invalid');
   const entry = { meta: {}, records: [], invalidRecords: [], flags: [] };
   assert.equal(validateShard({ shardVersion: 's0', drugs: { AC48092100: entry } }, meta, 'AC48', 'AC48092100').reason, 'version_mismatch');
   assert.equal(validateShard({ shardVersion: 's1', drugs: {} }, meta, 'AC48', 'AC48092100').reason, 'missing_code');

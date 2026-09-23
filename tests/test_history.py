@@ -343,7 +343,19 @@ def test_code_sets_are_equal_and_shards_are_disjoint(tmp_path, small_cfg):
     run(raw, data_dir=tmp_path, build_date=D, checked_at="2026-09-11T12:00:00+08:00",
         source_modified=None, cfg=small_cfg, fixtures_dir="__none__")
     source_codes = {r["code"] for r in parse_csv(raw)}
-    index_codes = {d["code"] for d in json.loads((tmp_path / "drug_index.json").read_text("utf-8"))["drugs"]}
+    # columnar/1：測試自己解碼，不呼叫受測模組的 helper——否則期望值就由受測程式產生
+    index_doc = json.loads((tmp_path / "drug_index.json").read_text("utf-8"))
+    assert index_doc["indexFormat"] == "columnar/1"
+    assert index_doc["fields"][:14] == [
+        "code", "chName", "enName", "ingredient", "dosageForm", "strength", "strengthUnit",
+        "atcCode", "manufacturer", "firstEffectiveDate", "lastPriceChangeDate",
+        "historyCount", "priceChangeCount", "flags"]
+    _ci = index_doc["fields"].index("code")
+    index_codes = {r[_ci] for r in index_doc["rows"]}
+    # §3.5：rows 依 code 嚴格遞增是契約（prepareIndex 不再有 fallback sort）
+    _codes_in_order = [r[_ci] for r in index_doc["rows"]]
+    assert _codes_in_order == sorted(_codes_in_order)
+    assert len(_codes_in_order) == len(index_codes)
     meta = json.loads((tmp_path / "meta.json").read_text("utf-8"))
 
     shard_codes = []

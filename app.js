@@ -117,10 +117,15 @@ async function loadCore() {
     if (vi.reason === 'version_mismatch') next = { core: 'mismatch' };
     else if (!vi.ok) throw new LoadError('invalid', 'drug_index.json 內容不合法');
     else {
+      // prepareIndex 會在必經 traversal 中做全量 shape／type 驗證，失敗時丟
+      // IndexShapeError，由下方 catch 轉成 invalid（spec-index-format.md §4.1.1）
+      const prepared = E.prepareIndex(index);
       next = {
         core: 'ready', meta,
-        prepared: E.prepareIndex(index.drugs),
-        byCode: new Map(index.drugs.map((d) => [d.code, d])),
+        prepared,
+        // columnar 下存的是 row index，不是物件——row 表示不得外洩（§4.2.1），
+        // 取用一律經 drugByCode()
+        byCode: new Map(prepared.rows.map((r, i) => [r[0], i])),
       };
     }
   } catch (e) {
@@ -280,6 +285,15 @@ function runSearch() {
 
 // 「現行 0 元」遮罩依瀏覽器日期而定：同一天只算一次，日期改變（state.today 於選藥時更新）才重算
 let maskCache = { prepared: null, day: null, mask: null };
+/**
+ * 依代號取 logical drug 視圖。
+ * columnar 下 `byCode` 存的是 row index，物件在這裡才建（§4.2.1）。
+ */
+function drugByCode(code) {
+  const i = state.byCode?.get(code);
+  return i === undefined ? undefined : state.prepared.drugAt(i);
+}
+
 function hideMask() {
   if (maskCache.prepared !== state.prepared || maskCache.day !== state.today) {
     maskCache = { prepared: state.prepared, day: state.today, mask: E.terminatedMask(state.prepared, state.today) };
@@ -345,7 +359,7 @@ async function showDetail(code) {
     return;
   }
   state.today = E.localISODate();
-  const drug = state.byCode.get(code);
+  const drug = drugByCode(code);
   if (!drug) {
     box.innerHTML = `<div class="card"><h2>查無此代號</h2>
       <p>找不到健保代號 <span class="mono">${esc(code) || '（空白）'}</span>。請確認代號是否正確，或<a href="./" data-action="to-search">回搜尋頁</a>以品名查詢。</p></div>`;
@@ -1042,7 +1056,7 @@ function restoreCompare() {
 }
 
 function trayChipHTML(x) {
-  const d = state.byCode?.get(x.code);
+  const d = drugByCode(x.code);
   const name = d ? d.chName : '';
   return `<span class="tray-chip" data-slot="${x.slot + 1}">
     <span class="tray-dot" aria-hidden="true"></span>
@@ -1204,7 +1218,7 @@ function renderCompare() {
   const t0 = performance.now();
   $('compareBody').innerHTML = chart + tables + `<ul class="compare-codes">${items.map((x) => {
     const d = state.compareData.get(x.code) || { status: 'loading' };
-    const drug = state.byCode?.get(x.code);
+    const drug = drugByCode(x.code);
     const name = d.status === 'ok' ? (E.selectMeta(d.entry, state.today)?.chName ?? drug?.chName ?? '') : '';
     return `<li class="compare-code" data-code="${esc(x.code)}" data-slot="${x.slot + 1}" data-status="${d.status}">
       <span class="tray-dot" aria-hidden="true"></span>

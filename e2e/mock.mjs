@@ -1,6 +1,7 @@
 // e2e mock 資料：以 golden 凍結快照（tests/fixtures/golden_frontend_2026-09-11.json）組出
 // meta／index／status／shards，並可逐項注入失敗（404、損毀、延遲、版本不一致）。
 import { readFileSync } from 'node:fs';
+import { INDEX_FIELDS, INDEX_FORMAT, INDEX_WINDOW_FIELDS } from '../engine.js';
 
 const front = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_2026-09-11.json', import.meta.url), 'utf8'));
 export const DATA_VERSION = 'sha256:e2e-v1';
@@ -10,8 +11,62 @@ const FILLER = Array.from({ length: 120 }, (_, i) => ({
   code: `AC48${String(i).padStart(3, '0')}900`,
   chName: `填充藥品${i}`, enName: `FILLER ${i}`, ingredient: 'AC4809 FILLER',
   strength: '', strengthUnit: '', dosageForm: '錠劑', atcCode: '', manufacturer: '',
-  window: [], historyCount: 0, priceChangeCount: 0, firstEffectiveDate: null, lastPriceChangeDate: null, flags: [],
+  window: [], historyCount: 0, priceChangeCount: 0,
+  firstEffectiveDate: '2020-01-01',    // 非 null 是契約（spec-index-format.md §3.3）
+  lastPriceChangeDate: null, flags: [],
 }));
+
+/**
+ * 物件陣列 → columnar/1。依 code 排序（§3.5 契約）。
+ * mock 的來源 fixture 是物件形狀，轉換責任放在這裡，讓各 spec 不必各自處理表示法。
+ */
+function toColumnar(drugs, dataVersion) {
+  const rows = [...drugs]
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0))
+    .map((d) => [
+      ...INDEX_FIELDS.map((k) => d[k]),
+      (d.window || []).map((r) => INDEX_WINDOW_FIELDS.map((k) => r[k])),
+    ]);
+  return {
+    dataVersion, indexFormat: INDEX_FORMAT,
+    fields: [...INDEX_FIELDS], windowFields: [...INDEX_WINDOW_FIELDS], rows,
+  };
+}
+
+/**
+ * 改寫 columnar index 中某代號某 window 列的一個欄位。
+ *
+ * 用來注入「build 後日期移動」之類的情境。**必須用這個而不是改
+ * `drugFromIndex()` 的回傳值**——那是新建的副本，改了不會反映到 index.rows。
+ */
+export function setWindowField(index, code, winIdx, field, value) {
+  const ci = index.fields.indexOf('code');
+  const fi = index.windowFields.indexOf(field);
+  if (fi < 0) throw new Error(`未知的 window 欄位：${field}`);
+  const row = index.rows.find((r) => r[ci] === code);
+  if (!row) throw new Error(`index 中沒有代號 ${code}`);
+  const w = row[index.fields.length];
+  if (!w[winIdx]) throw new Error(`${code} 沒有第 ${winIdx} 個 window 列`);
+  w[winIdx][fi] = value;
+}
+
+/**
+ * columnar index 取單筆 logical drug——給 spec **斷言**用。
+ * 回傳的是新建的副本，改它不會影響 index；要改請用 setWindowField()。
+ */
+export function drugFromIndex(index, code) {
+  const ci = index.fields.indexOf('code');
+  const row = index.rows.find((r) => r[ci] === code);
+  if (!row) return null;
+  const o = {};
+  index.fields.forEach((k, j) => { o[k] = row[j]; });
+  o.window = row[index.fields.length].map((wr) => {
+    const w = {};
+    index.windowFields.forEach((k, j) => { w[k] = wr[j]; });
+    return w;
+  });
+  return o;
+}
 
 export function buildData() {
   const shards = {};
@@ -20,15 +75,19 @@ export function buildData() {
     (shards[p] ||= { shardVersion: `sha256:e2e-${p}`, drugs: {} }).drugs[code] = structuredClone(entry);
   }
   const files = Object.keys(shards).sort();
+  const index = toColumnar(
+    [...Object.values(structuredClone(front.index)), ...FILLER], DATA_VERSION,
+  );
   const meta = {
     dataVersion: DATA_VERSION,
     generatedAt: '2026-09-11T23:07:52+08:00',
     coverageStart: '1995-03-01', coverageEnd: '2026-10-01',
-    sourceRowCount: 114, uniqueDrugCodeCount: 11,
+    sourceRowCount: 114,
+    // validateIndex 會比對 rows.length（§3.5），不能寫死 golden 的 11
+    uniqueDrugCodeCount: index.rows.length,
     shards: { prefixLength: 4, files, versions: Object.fromEntries(files.map((p) => [p, shards[p].shardVersion])) },
     source: 'NHIA A21030000I-E41001-001',
   };
-  const index = { dataVersion: DATA_VERSION, drugs: [...Object.values(structuredClone(front.index)), ...FILLER] };
   // 預告清單同樣由 Python 生成器產出（golden fixture 的 upcoming 區塊），只換資料版本
   const upcoming = { ...structuredClone(front.upcoming), dataVersion: DATA_VERSION };
   return { meta, index, shards, upcoming };

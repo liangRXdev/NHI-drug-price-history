@@ -53,6 +53,11 @@ class GuardConfig:
     max_disappeared_pct: int = 1      # 語意 guard，可人工放行
     shard_warn_gzip_bytes: int = 2_000_000
     shard_fail_gzip_bytes: int = 5_000_000
+    # index 的 size guard：spec.md §7 原本只有 shard 有，index 因此一路長到 3.28 MB
+    # 沒被擋。門檻取在轉換後（約 2.55 MB）與轉換前（3.28 MB）之間
+    # （spec-index-format.md §5.4）
+    index_warn_gzip_bytes: int = 2_500_000
+    index_fail_gzip_bytes: int = 3_500_000
     # 預告清單：兩條皆為 WARNING。列數 0 可能為真（健保公告有空窗期），
     # 佔比過高與體積暴增則多半是來源結構異常（spec-upcoming §3.4、§3.5）
     upcoming_code_pct_warn: int = 5
@@ -125,6 +130,69 @@ def shard_versions(shards):
     return {p: sha256(dumps(shards[p])) for p in sorted(shards)}
 
 
+# ── columnar/1 表示法（spec-index-format.md §3）────────────────
+# 這三個常數與 engine.js 的 INDEX_FORMAT／INDEX_FIELDS／INDEX_WINDOW_FIELDS
+# 以及 scripts/convert_index_columnar.py 必須逐字相同；漂移由測試擋。
+INDEX_FORMAT = "columnar/1"
+INDEX_FIELDS = [
+    "code", "chName", "enName", "ingredient", "dosageForm", "strength", "strengthUnit",
+    "atcCode", "manufacturer", "firstEffectiveDate", "lastPriceChangeDate",
+    "historyCount", "priceChangeCount", "flags",
+]
+INDEX_WINDOW_FIELDS = [
+    "from", "to", "price", "rawPrice", "previousPrice", "pricedBefore", "priceState",
+    "eventType", "crossesStop", "changeFlag", "absoluteChange", "percentChange", "flags",
+]
+
+
+def index_columnar(index_drugs, version):
+    """→ columnar/1 的 dict。
+
+    缺欄位時 `d[k]` 直接 KeyError 讓 build 中止——§3.4 規定缺 key 即失敗，
+    不得補 null（那是有損轉換，反轉後分不出「原本缺」與「原本是 null」）。
+    """
+    rows = []
+    prev = ""
+    for d in index_drugs:
+        code = d["code"]
+        if code <= prev:                        # §3.5：排序是契約，不是巧合
+            raise ValueError(f"index 未依 code 嚴格遞增：{prev!r} -> {code!r}")
+        prev = code
+        rows.append(
+            [d[k] for k in INDEX_FIELDS]
+            + [[[r[k] for k in INDEX_WINDOW_FIELDS] for r in d["window"]]]
+        )
+    return {
+        "dataVersion": version,
+        "indexFormat": INDEX_FORMAT,
+        "fields": list(INDEX_FIELDS),
+        "windowFields": list(INDEX_WINDOW_FIELDS),
+        "rows": rows,
+    }
+
+
+def index_codes(doc):
+    """從已發布的 drug_index.json 取代號集合。支援 legacy 與 columnar/1（§5.5）。
+
+    **絕對不可**用 `.get("drugs", [])` 之類的預設值吸收格式差異：那會讓 prev_codes
+    變成空集合，消失代號 guard（max_disappeared_pct）永遠算不出任何代號消失，
+    而 build 照常成功——實測確認過的靜默失效路徑。
+    分辨不出格式時一律拋錯，讓它 fail loud。
+    """
+    if not doc:
+        return set()
+    if doc.get("indexFormat") == INDEX_FORMAT:
+        i = doc["fields"].index("code")
+        return {r[i] for r in doc["rows"]}
+    if doc.get("indexFormat"):
+        raise ValueError(f"前次 drug_index.json 是未知表示法 {doc['indexFormat']!r}")
+    if isinstance(doc.get("drugs"), list):      # legacy：首次遷移時 data/ 裡是舊格式
+        return {d["code"] for d in doc["drugs"]}
+    raise ValueError(
+        "前次 drug_index.json 格式無法辨識；拒絕以空集合繼續"
+        "（那會讓消失代號 guard 靜默失效）")
+
+
 def data_version(versions):
     """全域資料版本＝各 shard hash 的 hash；只依來源內容，不依 build 日（spec §5.2）。"""
     return sha256(dumps(versions))
@@ -134,7 +202,7 @@ def render(shards, index_drugs, versions, version):
     """→ {相對路徑: bytes}（僅資料檔；meta／status 另行產生）。"""
     files = {f"history/{p}.json": dumps({"shardVersion": versions[p], "drugs": shards[p]})
              for p in sorted(shards)}
-    files["drug_index.json"] = dumps({"dataVersion": version, "drugs": index_drugs})
+    files["drug_index.json"] = dumps(index_columnar(index_drugs, version))
     return files
 
 
@@ -157,7 +225,7 @@ def upcoming_payload(upcoming_items, version, build_date):
 
 
 def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
-                 upcoming_errors=(), upcoming_bytes=b""):
+                 upcoming_errors=(), upcoming_bytes=b"", index_bytes=b""):
     """→ (errors, warnings, anomalies_overridden)。errors 非空即不得發布。"""
     errors, warnings, overridden = [], [], []
     rows = stats["sourceRowCount"]
@@ -197,6 +265,15 @@ def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allo
             errors.append(f"{path} gzip {size:,} bytes > {cfg.shard_fail_gzip_bytes:,}")
         elif size > cfg.shard_warn_gzip_bytes:
             warnings.append(f"{path} gzip {size:,} bytes > {cfg.shard_warn_gzip_bytes:,}")
+
+    # index 是首屏的阻塞路徑，guard 對**實際要寫出的 bytes** 計算，不是獨立 helper
+    # （spec-index-format.md §5.4、F9）
+    if index_bytes:
+        size = gzip_size(index_bytes)
+        if size > cfg.index_fail_gzip_bytes:
+            errors.append(f"drug_index.json gzip {size:,} bytes > {cfg.index_fail_gzip_bytes:,}")
+        elif size > cfg.index_warn_gzip_bytes:
+            warnings.append(f"drug_index.json gzip {size:,} bytes > {cfg.index_warn_gzip_bytes:,}")
 
     # 預告清單：驗證失敗一律 error（全有全無，整批不發布）；統計異常只 WARNING
     errors.extend(f"upcoming.json 驗證失敗：{m}" for m in upcoming_errors)
@@ -325,13 +402,14 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
 
     prev_meta = read_json(Path(data_dir) / "meta.json")
     prev_index = read_json(Path(data_dir) / "drug_index.json")
-    prev_codes = {d["code"] for d in prev_index["drugs"]} if prev_index else set()
+    prev_codes = index_codes(prev_index)        # 支援 legacy 與 columnar/1（§5.5）
     new_codes = {d["code"] for d in index_drugs}
     shard_files = {k: v for k, v in files.items() if k.startswith("history/")}
 
     errors, warnings, overridden = check_guards(
         stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
-        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes)
+        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes,
+        index_bytes=files["drug_index.json"])
     warnings += golden_rewrites(shards, fixtures_dir)
     if errors:
         raise BuildError(errors, warnings)

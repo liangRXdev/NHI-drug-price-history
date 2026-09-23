@@ -1,6 +1,6 @@
 // 前端驗收：plan.md §5 C1、C3–C8、E3–E5（DOM、viewport、route mock）。
 import { test, expect } from '@playwright/test';
-import { buildData, mockSite, statusDaysAgo } from './mock.mjs';
+import { buildData, mockSite, setWindowField, statusDaysAgo } from './mock.mjs';
 
 const detail = (page) => page.locator('#detail');
 // 先清空並等「請輸入」提示出現，再輸入：避免上一次查詢的結果讓本次斷言假通過（codex T4）
@@ -55,8 +55,7 @@ test('C1 AB47689100 當天', async ({ page }) => {
 test('C1 window 耗盡：搜尋卡顯示「需更新」且無確定價格；詳細頁仍由 history 判定', async ({ page }) => {
   // AC48867100 的 window 只有 [2026-04-01, null]；把它改成有迄日，模擬 build 後又跨過下一筆
   const data = buildData();
-  const w = data.index.drugs.find((d) => d.code === 'AC48867100').window[0];
-  w.to = '2026-09-30';
+  setWindowField(data.index, 'AC48867100', 0, 'to', '2026-09-30');
   await mockSite(page, { today: '2026-10-05', data });
   await page.goto('/');
   await search(page, 'AC48867100');

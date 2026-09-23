@@ -36,6 +36,12 @@ test('正式資料：index 每筆 window 的非有價列都帶 pricedBefore', as
   const res = await request.get('/data/drug_index.json');
   expect(res.ok()).toBe(true);
   const index = await res.json();
-  const missing = index.drugs.filter((d) => d.window.some((w) => w.priceState !== 'priced' && !('pricedBefore' in w)));
-  expect(missing.map((d) => d.code).slice(0, 5)).toEqual([]);
+  // columnar/1：所有欄位都在每一列（§3.4），所以這裡驗的是「非有價列的 pricedBefore 不為 undefined」
+  expect(index.indexFormat).toBe('columnar/1');
+  const ci = index.fields.indexOf('code');
+  const wState = index.windowFields.indexOf('priceState');
+  const wPb = index.windowFields.indexOf('pricedBefore');
+  const missing = index.rows.filter((r) => r[index.fields.length]
+    .some((w) => w[wState] !== 'priced' && w[wPb] === undefined));
+  expect(missing.map((r) => r[ci]).slice(0, 5)).toEqual([]);
 });

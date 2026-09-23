@@ -374,24 +374,129 @@ export function searchCard(drug, T) {
  * 用平行陣列而非每筆一個物件：45k 筆在行動裝置上，配置與 GC 是可搜尋前的主要成本（plan E7）。
  * build 輸出本已依代號排序，已排序時跳過排序。
  */
-export function prepareIndex(drugs) {
+/** §4.1 的逐筆檢查失敗時丟這個；呼叫端一律轉成 `invalid`。 */
+export class IndexShapeError extends Error {}
+
+const isFiniteNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const isNonNegInt = (v) => Number.isInteger(v) && v >= 0;
+const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/**
+ * columnar/1 → 搜尋所需的三個平行陣列，**並在同一趟走訪完成全量 shape／type 驗證**。
+ *
+ * 不還原成物件陣列（方案 (b)）：2026-09-23 實測，還原 45,179 個物件要多付 230 ms，
+ * 會把下載省下的優勢吃掉大半（spec-index-format.md §9）。
+ *
+ * `rows` 的排序是契約（§3.5），不是巧合——這裡只驗不排序。
+ * 舊版在此處有 fallback sort，columnar/1 下未排序一律視為資料違約。
+ */
+export function prepareIndex(index) {
   const SEP = '\u0001';     // 欄位分隔：避免查詢字串跨欄位邊界誤中
-  let list = drugs;
-  for (let i = 1; i < list.length; i++) {
-    if (list[i - 1].code > list[i].code) {
-      list = drugs.slice().sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
-      break;
-    }
-  }
-  const n = list.length;
+  const F = index.fields;
+  const W = index.windowFields;
+  const N = F.length;
+  const M = W.length;
+  const rows = index.rows;
+  const n = rows.length;
+
+  const iCode = 0;          // §3.3 前綴位置固定，但仍由常數表推導而非寫死數字
+  const iCh = INDEX_FIELDS.indexOf('chName');
+  const iEn = INDEX_FIELDS.indexOf('enName');
+  const iIng = INDEX_FIELDS.indexOf('ingredient');
+  const iHist = INDEX_FIELDS.indexOf('historyCount');
+  const iPcc = INDEX_FIELDS.indexOf('priceChangeCount');
+  const iFlags = INDEX_FIELDS.indexOf('flags');
+  const iLpcd = INDEX_FIELDS.indexOf('lastPriceChangeDate');
+  const iFed = INDEX_FIELDS.indexOf('firstEffectiveDate');
+  // 字串欄位的位置一次算好——放在迴圈內會變成 45,179 × 5 次 indexOf 加建陣列
+  const STR_COLS = ['chName', 'enName', 'ingredient', 'dosageForm', 'strength',
+    'strengthUnit', 'atcCode', 'manufacturer'].map((k) => INDEX_FIELDS.indexOf(k));
+  // 日期字串重複度極高（4.5 萬列只有數百個相異值），逐次 split＋new Date 是純浪費
+  const dateSeen = new Set();
+  const okDate = (v) => {
+    if (dateSeen.has(v)) return true;
+    if (!isCalendarDate(v)) return false;
+    dateSeen.add(v);
+    return true;
+  };
+
+  const wFrom = INDEX_WINDOW_FIELDS.indexOf('from');
+  const wTo = INDEX_WINDOW_FIELDS.indexOf('to');
+  const wPrice = INDEX_WINDOW_FIELDS.indexOf('price');
+  const wRaw = INDEX_WINDOW_FIELDS.indexOf('rawPrice');
+  const wPrev = INDEX_WINDOW_FIELDS.indexOf('previousPrice');
+  const wPb = INDEX_WINDOW_FIELDS.indexOf('pricedBefore');
+  const wState = INDEX_WINDOW_FIELDS.indexOf('priceState');
+  const wEvent = INDEX_WINDOW_FIELDS.indexOf('eventType');
+  const wCross = INDEX_WINDOW_FIELDS.indexOf('crossesStop');
+  const wChg = INDEX_WINDOW_FIELDS.indexOf('changeFlag');
+  const wAbs = INDEX_WINDOW_FIELDS.indexOf('absoluteChange');
+  const wPct = INDEX_WINDOW_FIELDS.indexOf('percentChange');
+  const wFlags = INDEX_WINDOW_FIELDS.indexOf('flags');
+
   const codes = new Array(n);
   const hays = new Array(n);
+  let prev = '';
+
   for (let i = 0; i < n; i++) {
-    const d = list[i];
-    codes[i] = d.code.toLowerCase();
-    hays[i] = `${d.code}${SEP}${d.chName}${SEP}${d.enName}${SEP}${d.ingredient}`.toLowerCase();
+    const r = rows[i];
+    if (!Array.isArray(r) || r.length !== N + 1) throw new IndexShapeError(`rows[${i}] 長度不符`);
+
+    const code = r[iCode];
+    if (typeof code !== 'string' || !code) throw new IndexShapeError(`rows[${i}] code 非法`);
+    if (code <= prev) throw new IndexShapeError(`rows[${i}] code 未嚴格遞增`);
+    prev = code;
+
+    for (let q = 0; q < STR_COLS.length; q++) {
+      const j = STR_COLS[q];
+      if (typeof r[j] !== 'string') throw new IndexShapeError(`rows[${i}] ${F[j]} 型別錯`);
+    }
+    if (!okDate(r[iFed])) throw new IndexShapeError(`rows[${i}] firstEffectiveDate 非日曆日`);
+    if (r[iLpcd] !== null && !okDate(r[iLpcd])) throw new IndexShapeError(`rows[${i}] lastPriceChangeDate 非法`);
+    if (!isNonNegInt(r[iHist]) || !isNonNegInt(r[iPcc])) throw new IndexShapeError(`rows[${i}] count 非非負整數`);
+    if (!isStrArray(r[iFlags])) throw new IndexShapeError(`rows[${i}] flags 非字串陣列`);
+
+    const w = r[N];
+    if (!Array.isArray(w)) throw new IndexShapeError(`rows[${i}] window 非陣列`);
+    for (let k = 0; k < w.length; k++) {
+      const wr = w[k];
+      if (!Array.isArray(wr) || wr.length !== M) throw new IndexShapeError(`rows[${i}].window[${k}] 長度不符`);
+      if (!okDate(wr[wFrom])) throw new IndexShapeError(`rows[${i}].window[${k}] from 非日曆日`);
+      if (wr[wTo] !== null && !okDate(wr[wTo])) throw new IndexShapeError(`rows[${i}].window[${k}] to 非法`);
+      for (const q of [wPrice, wPrev, wPb, wAbs, wPct]) {
+        if (wr[q] !== null && !isFiniteNum(wr[q])) throw new IndexShapeError(`rows[${i}].window[${k}] ${W[q]} 非有限數`);
+      }
+      if (typeof wr[wRaw] !== 'string' || typeof wr[wChg] !== 'string') throw new IndexShapeError(`rows[${i}].window[${k}] 字串欄位型別錯`);
+      if (typeof wr[wCross] !== 'boolean') throw new IndexShapeError(`rows[${i}].window[${k}] crossesStop 非布林`);
+      if (!PRICE_STATES.has(wr[wState])) throw new IndexShapeError(`rows[${i}].window[${k}] priceState 不在值域`);
+      if (!EVENT_TYPES.has(wr[wEvent])) throw new IndexShapeError(`rows[${i}].window[${k}] eventType 不在值域`);
+      if (!isStrArray(wr[wFlags])) throw new IndexShapeError(`rows[${i}].window[${k}] flags 非字串陣列`);
+    }
+
+    codes[i] = code.toLowerCase();
+    hays[i] = `${code}${SEP}${r[iCh]}${SEP}${r[iEn]}${SEP}${r[iIng]}`.toLowerCase();
   }
-  return { drugs: list, codes, hays };
+
+  /** 第 i 筆的 window 列，轉成判定函式看得懂的物件。只在需要時建，不預先全量建。 */
+  const winOf = (i) => rows[i][N].map((wr) => {
+    const o = {};
+    for (let k = 0; k < M; k++) o[W[k]] = wr[k];
+    return o;
+  });
+
+  /**
+   * 第 i 筆的 logical drug 視圖（§4.2.1）——row 的位置表示法不得外洩給其他模組，
+   * 判定與 render 看到的必須仍是舊的物件形狀。
+   */
+  const drugAt = (i) => {
+    const r = rows[i];
+    const o = {};
+    for (let j = 0; j < N; j++) o[F[j]] = r[j];
+    o.window = winOf(i);
+    return o;
+  };
+
+  return { n, codes, hays, rows, fields: F, windowFields: W, winOf, drugAt };
 }
 
 /**
@@ -400,11 +505,27 @@ export function prepareIndex(drugs) {
  * 暫停支付、衝突、window 耗盡、只有預告等不確定狀態一律不算，寧可多顯示也不誤藏。
  */
 export function terminatedMask(prepared, T) {
-  return prepared.drugs.map((d) => {
-    const eff = (d.window || []).filter((r) => isEffective(r, T));
-    return eff.length === 1 && eff[0].priceState === 'terminated'
-      && !eff[0].flags.some((f) => f === 'conflict' || f === 'conflicting_price_interval' || f === 'overlap');
-  });
+  // 全量走訪 45,179 筆，但**不建物件**——建物件的成本見 spec-index-format.md §9。
+  // 判定規則與舊版逐字相同，只改成從 row 的位置取值。
+  const { rows, windowFields } = prepared;
+  const N = prepared.fields.length;
+  const wFrom = windowFields.indexOf('from');
+  const wTo = windowFields.indexOf('to');
+  const wState = windowFields.indexOf('priceState');
+  const wFlags = windowFields.indexOf('flags');
+  const out = new Array(prepared.n);
+  for (let i = 0; i < prepared.n; i++) {
+    const w = rows[i][N];
+    let hit = null;
+    let count = 0;
+    for (let k = 0; k < w.length; k++) {
+      const wr = w[k];
+      if (wr[wFrom] <= T && (wr[wTo] === null || wr[wTo] >= T)) { count++; hit = wr; }
+    }
+    out[i] = count === 1 && hit[wState] === 'terminated'
+      && !hit[wFlags].some((f) => f === 'conflict' || f === 'conflicting_price_interval' || f === 'overlap');
+  }
+  return out;
 }
 
 /**
@@ -416,7 +537,7 @@ export function terminatedMask(prepared, T) {
 export function search(prepared, query, hideMask = null) {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return null;
-  const { drugs, codes, hays } = prepared;
+  const { codes, hays, drugAt } = prepared;
   const exact = [];
   const prefix = [];
   const other = [];
@@ -431,7 +552,8 @@ export function search(prepared, query, hideMask = null) {
     else continue;
     if (hideMask && hideMask[i] && bucket !== exact) { hidden++; continue; }
     total++;
-    if (bucket.length < MAX_RESULTS) bucket.push(drugs[i]);    // 只保留可能顯示的前 50 筆，其餘只計數
+    // 只保留可能顯示的前 50 筆，其餘只計數。物件在這裡才建——全量建的成本見 §9
+    if (bucket.length < MAX_RESULTS) bucket.push(drugAt(i));
   }
   const items = exact.concat(prefix, other).slice(0, MAX_RESULTS);
   return { total, hidden, items };
@@ -457,11 +579,51 @@ export function validateMeta(meta) {
   return { ok: true };
 }
 
+/**
+ * `drug_index.json` 的表示法版本（spec-index-format.md §3.6）。
+ *
+ * `dataVersion` 是**來源內容**的雜湊，表示法改變不會讓它變動——少了這個常數就分不出
+ * 新舊表示法的產物。與 `UPCOMING_GENERATOR_VERSION` 同構。
+ */
+export const INDEX_FORMAT = 'columnar/1';
+
+/** §3.3 的 mandatory 前綴，順序即位置。其後允許附加欄位（§3.7 前綴相符規則）。 */
+export const INDEX_FIELDS = [
+  'code', 'chName', 'enName', 'ingredient', 'dosageForm', 'strength', 'strengthUnit',
+  'atcCode', 'manufacturer', 'firstEffectiveDate', 'lastPriceChangeDate',
+  'historyCount', 'priceChangeCount', 'flags',
+];
+export const INDEX_WINDOW_FIELDS = [
+  'from', 'to', 'price', 'rawPrice', 'previousPrice', 'pricedBefore', 'priceState',
+  'eventType', 'crossesStop', 'changeFlag', 'absoluteChange', 'percentChange', 'flags',
+];
+
+const prefixMatches = (arr, want) => Array.isArray(arr)
+  && arr.length >= want.length
+  && want.every((k, i) => arr[i] === k)
+  && arr.every((k) => typeof k === 'string' && k)
+  && new Set(arr).size === arr.length;
+
+/**
+ * §4.1 的頭部驗證。逐筆的 shape／type 全量檢查在 `prepareIndex` 的必經 traversal 裡做
+ * （§4.1.1）——抽驗會放行其餘四萬多筆，而位置式格式錯位後仍是合法 JSON。
+ *
+ * 判定順序（§4.1）：先定最小結構前提，再判版本，最後才是 schema。
+ * 順序顛倒的話，`null` 會被誤歸成「版本不合，請重新整理」這種可自癒的訊息。
+ */
 export function validateIndex(index, meta) {
-  if (!isObj(index) || typeof index.dataVersion !== 'string' || !Array.isArray(index.drugs)) {
+  // 1. 最小可比較前提——不可越過此步逕判 mismatch
+  if (!isObj(index) || typeof index.dataVersion !== 'string' || typeof index.indexFormat !== 'string') {
     return { ok: false, reason: 'invalid' };
   }
+  // 2、3. 版本
+  if (index.indexFormat !== INDEX_FORMAT) return { ok: false, reason: 'version_mismatch' };
   if (meta && index.dataVersion !== meta.dataVersion) return { ok: false, reason: 'version_mismatch' };
+  // 4. schema
+  if (!prefixMatches(index.fields, INDEX_FIELDS)) return { ok: false, reason: 'invalid' };
+  if (!prefixMatches(index.windowFields, INDEX_WINDOW_FIELDS)) return { ok: false, reason: 'invalid' };
+  if (!Array.isArray(index.rows) || index.rows.length === 0) return { ok: false, reason: 'invalid' };
+  if (meta && index.rows.length !== meta.uniqueDrugCodeCount) return { ok: false, reason: 'invalid' };
   return { ok: true };
 }
 
