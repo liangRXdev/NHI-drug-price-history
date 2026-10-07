@@ -142,25 +142,29 @@ def test_u2_fully_identical_rows_are_deduplicated_not_doubled():
     assert len(by_code(upcoming(rows), "M000000100")) == 1
 
 
-MULTI_UPCOMING_CODES = ("X000342121", "X000346219", "X000359219")
-
-
-def test_u2_real_data_multi_upcoming_codes_are_complete():
-    """全量資料正對照：已發布的 upcoming.json 必須含這 3 個代號的**全部**未生效列。
+def test_u2_real_data_upcoming_matches_history_for_every_code():
+    """全量資料正對照：已發布的 upcoming.json 必須逐代號等於 history 分片的**全部**未生效列。
 
     快照 11 碼無一有多筆未生效列（§9.1），只靠合成 fixture 無法證明正式產物沒漏。
+    母體不寫死代號：未生效列會隨時間生效，寫死的「多筆案例」每次資料更新都可能失格
+    （2026-10-04 原 3 碼全數降為 1 筆）。改為全代號雙向對帳，多筆案例有幾個就驗幾個。
     """
     published = json.loads((ROOT / "data" / "upcoming.json").read_text(encoding="utf-8"))
     build_date = published["buildDate"]
-    for code in MULTI_UPCOMING_CODES:
-        shard = json.loads((ROOT / "data" / "history" / f"{code[:4]}.json")
-                           .read_text(encoding="utf-8"))
-        expected = [(r["from"], r["rawPrice"], r["eventType"], r["priceState"])
-                    for r in shard["drugs"][code]["records"] if r["from"] > build_date]
-        actual = [(it["effectiveDate"], it["rawPrice"], it["eventType"], it["priceState"])
-                  for it in published["items"] if it["code"] == code]
-        assert len(expected) >= 2, f"{code} 已不再是多筆未生效案例，母體需重選"
-        assert actual == expected
+    expected = {}
+    for path in sorted((ROOT / "data" / "history").glob("*.json")):
+        shard = json.loads(path.read_text(encoding="utf-8"))
+        for code, drug in shard["drugs"].items():
+            rows = [(r["from"], r["rawPrice"], r["eventType"], r["priceState"])
+                    for r in drug["records"] if r["from"] > build_date]
+            if rows:
+                expected[code] = rows
+    actual = {}
+    for it in published["items"]:
+        actual.setdefault(it["code"], []).append(
+            (it["effectiveDate"], it["rawPrice"], it["eventType"], it["priceState"]))
+    assert expected, "history 無任何未生效列，對帳會空轉"
+    assert actual == expected
 
 
 # ── U3 描述欄位選列（§6.6，以 D 選列）───────────────────────────
