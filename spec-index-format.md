@@ -1,7 +1,7 @@
 # spec-index-format — `drug_index.json` 表示法瘦身
 
 > 版本 **v0.4**（2026-10-13，**B 方案重啟**：runtime 驗證收斂為「結構＋判定關鍵欄」，
-> 逐欄 type 改由 builder 發布路徑全量負責。決策與理由見 §9.2；待覆審）
+> 逐欄 type 改由 builder 發布路徑全量負責。決策與理由見 §9.2；已經 `/codex-checkplan` 覆審，可動工）
 > 前版 v0.3（2026-09-23，兩輪覆審後定案）依 §6.2 停工，見 §9.1。
 > 本文件只定義 `data/drug_index.json` 的**序列化表示法**。資料模型、判定規則、
 > shard 格式一律仍以 `spec.md` 為準，本文件不新增也不移除任何欄位語意。
@@ -289,6 +289,7 @@ render **拋例外**、**靜默改變判定**，或**未經 `esc` 進入 innerHT
 | window | `pricedBefore` | `=== null` 或 `typeof === 'number'` | `searchCard` 對 terminated／suspended 列呼叫 `fmtMoney(pricedBefore)` → 非數字時 `.toFixed` 拋 `TypeError`；`null` 與否另決定「此前無有價紀錄」分支 |
 | drug | `flags` | `Array.isArray` | 搜尋結果 render 的 `flagTags` 以 `(flags \|\| []).map` 取用：truthy 非陣列時拋 `TypeError` |
 | drug | `historyCount`、`priceChangeCount` | `typeof === 'number'` | 搜尋結果 render（`app.js` 的 `r-meta`）**未經 `esc`** 直接插入 innerHTML |
+| drug | `chName`、`enName`、`ingredient` | `typeof === 'string'` | `prepareIndex` 以模板字串組 haystack：非字串會變成 `"123"`／`"[object Object]"` 並**可被搜尋命中**——靜默改變搜尋命中（v0.4 覆審 1.1 補列） |
 
 > `from`／`to` 在 runtime **只驗 typeof**，不驗真實日曆日——後者（含 `Set` 快取）是 v0.3
 > runtime 成本的一部分，且格式正確但日曆不合法的字串仍可字典序比較、不 crash，
@@ -300,12 +301,18 @@ render **拋例外**、**靜默改變判定**，或**未經 `esc` 進入 innerHT
 > 屬「只影響顯示」，交給 builder（§3.3.2 finite 規則）。`historyCount`／`priceChangeCount`
 > 的「非負整數」同樣交給 builder。
 >
-> 不列入的欄位（drug 層字串欄與日期；window 層 `price`、`rawPrice`、`previousPrice`、
+> 不列入的欄位（drug 層其餘字串欄 `dosageForm`／`strength`／`strengthUnit`／`atcCode`／`manufacturer` 與日期；window 層 `price`、`rawPrice`、`previousPrice`、
 > `absoluteChange`、`percentChange`、`crossesStop`、`changeFlag`）由 `searchCard`／
 > `terminatedMask` 以字串模板或 `fmtPct`（接受字串）使用、render 時經 `esc`／`dash`，
 > 或完全不讀，型別錯時**只影響顯示**，不改變搜尋命中、隱藏判定，也不拋例外。
 > 這是 B 方案接受的殘餘風險，見 §10。
 > **新增任何讀取上述欄位的判定邏輯或未經 `esc` 的 render 時，必須重新評估本表**。
+>
+> **為什麼判定關鍵欄必須在載入期擋下**（v0.4 覆審 1.2）：`prepareIndex` 拋出的例外由 `loadCore`
+> 的 catch 轉成 `core: 'error'`、`coreError.kind: 'invalid'`（fail-closed，顯示「目前無法查詢」）；
+> 但進入 `ready` 之後，`runSearch`／rAF 呼叫鏈到 `terminatedMask`、`searchCard`、render **沒有 catch**——
+> 漏到 ready 後的型別錯誤會成為未捕捉例外，畫面可能停留在前一次的結果。本案不新增全域 catch，
+> 而是要求所有會在 ready 後 crash 的欄位都列入共通層。
 
 **判定順序**（須有測試釘住，JS 與 Python 必須一致）：
 
@@ -468,6 +475,10 @@ prev_codes = {d["code"] for d in prev_index["drugs"]} if prev_index else set()
 - **驗證覆蓋範圍**：兩層都是**全量**（每一筆、每一個 window 列），沒有任何一層抽驗。
 
 > v0.3 的「兩端都全量驗 type」（第二輪 2.7）在 v0.4 推翻，理由見 §9.2。
+>
+> F7b 的「JS 回 `ok`」是**刻意的摩擦**，不是永久凍結：日後要把任何檢查移回 runtime，
+> 須先修訂 §4.1、重量 F10，再改 expected。F10 是手動量測、不在 CI，無法單獨防止驗證逐步加重——
+> v0.3 正是這樣失去門檻的。（v0.4 覆審 4.1，判定拒絕）
 
 ### 5.7 builder 發布路徑的全量驗證（**v0.4 新增，B 方案的前提**）
 
@@ -572,15 +583,15 @@ F1／F2／F4 需要「舊格式」作為比對基準。**禁止由待測轉換�
 | **F4** | 新格式反轉回舊格式後，以 canonical serializer 產出的 **bytes 與 oracle canonical bytes 完全相同**；另逐筆檢查 key set、陣列長度、型別、值。並驗同一輸入轉兩次 SHA-256 相同 | 由新格式反解再與自己比；只比 parse 後的值不比 key presence |
 | **F5** | `indexFormat` 缺漏／錯值／非字串三案，各斷言：validator reason、core 狀態、**搜尋不可用**、無結果卡、無舊 `byCode`／`prepared` 資料可見、提供 reload 而非 retry。另含「舊前端＋新 index」混批案例 | 只驗文案，實際仍可搜尋到舊資料 |
 | **F6** | 對 14 個 drug fields 與 13 個 window fields **逐一**刪除／重複／空字串／非字串，每一項都必須回 `invalid`；另正向斷言「未知附加欄位允許存在」 | 只刪一個 haystack 欄位；必要欄位清單自身有漏 |
-| **F7a** | **共通層**：共用 fixture，**每案帶獨立 expected `{ok, reason}`**；JS 與 Python **各自對 expected 驗證**，不得互比、不得一端委派另一端。反例須含：重複 fields、短／長 drug row、window 非陣列、短／長 window row、重複 code、未排序、空 rows、§4.1 每一個判定關鍵欄的錯型別／值域外、format mismatch 與 dataVersion mismatch 的優先序 | 兩端互比，兩端都錯仍全綠（＝既有日期 validator 教訓重演） |
-| **F7b** | **builder 層**：共用 fixture（無效日曆日、非 `YYYY-MM-DD` 格式的日期字串（如 `20260911`）、非 finite 數字 literal、bool 當整數、負的 count、drug 層字串欄非字串、`rawPrice` 為數字、`flags` 含非字串元素等），每案帶 expected：**Python 回 `invalid`、JS 回 `ok`**。兩端各自對 expected 驗證 | Python 漏驗而 runtime 也不驗 ⇒ 錯誤無人攔；或日後默默把 type 驗證加回 runtime、F10 退化卻無測試轉紅 |
+| **F7a** | **共通層**：共用 fixture，**每案帶獨立 expected `{ok, reason}`**；JS 與 Python **各自對 expected 驗證**，不得互比、不得一端委派另一端。反例須含：重複 fields、短／長 drug row、window 非陣列、短／長 window row、**`code` 為空字串／number／null**、重複 code、未排序、空 rows、§4.1 **每一個**判定關鍵欄的錯型別（`priceState`／`eventType` 另含「型別正確但不在值域」）；**reason 優先序組合矩陣**：最小結構錯＋format mismatch、format mismatch＋schema 錯、dataVersion mismatch＋schema 錯。**正例須含**：最小合法 fixture、含合法附加欄位的 fixture，兩端都必須回 `ok` | 兩端互比，兩端都錯仍全綠（＝既有日期 validator 教訓重演）；不驗 code 型別只驗排序；validator 一律回 `invalid` 讓所有反例自然通過 |
+| **F7b** | **builder 層**：以 §3.3 的 **14＋13 個欄位逐欄為列**、該欄在 builder 層的每一個性質（型別、nullability、值域、§3.3.2 邊界：真實日曆日、`YYYY-MM-DD` 格式、finite、bool 不得當整數、非負整數、`flags` 元素為字串、`rawPrice` 不得為數字）為欄的**完整矩陣**；**每案只破壞一個性質**，矩陣中每一格都要有案例，不得以「等」省略。每案帶 expected：**Python 回 `invalid`、JS 回 `ok`**。另含**合法邊界正例**（nullable 欄為 `null`、count 為 0、`flags` 為 `[]`、空字串欄），兩端都必須回 `ok`。兩端各自對 expected 驗證 | Python 漏驗而 runtime 也不驗 ⇒ 錯誤無人攔；只驗每類的代表欄位；或日後默默把 type 驗證加回 runtime、F10 退化卻無測試轉紅 |
 | **F8** | 列出**必跑 suite 與本案新增的 mandatory test ID**；零 failure、零 unexpected skip/todo。測試總數只作資訊，不作主要斷言 | 刪掉重要測試補等量空測試；大量 skip 仍回綠 |
 | **F9** | 經**完整 build/publish 路徑**測 size guard：對實際要寫出的 bytes、gzip level 6 計算；等於門檻通過、超 1 byte 分別 warning／fail；fail 時 `data/` 與 `status.json` 均未變動；warning 須出現在 build 輸出 | guard 只在孤立 helper 被測，從未接入發布路徑 |
-| **F10** | 依 §6.1（含 v0.4 重量規定）量測 **B 方案正式實作**，合計 median **≤ 3,800 ms**，且相對**同輪** legacy baseline 改善 **≥ 500 ms**。門檻與 v0.3 相同、不調整。綠燈＝與 2026-09-23 原型實測相當（3,464 ms），**不是**達成某個絕對設計目標 | 事後填寬鬆門檻；取單次最佳值；warm cache；拿不同輪次的 baseline 與候選互比；拿原型或 v0.3 數字充當 v0.4 結果 |
+| **F10** | 依 §6.1（含 v0.4 重量規定）量測 **B 方案正式實作**，合計 median **≤ 3,800 ms**，且相對**同輪** legacy baseline 改善 **≥ 500 ms**。門檻與 v0.3 相同、不調整。綠燈＝與 2026-09-23 原型實測相當（3,464 ms），**不是**達成某個絕對設計目標。驗收紀錄須記錄：被測 commit（工作樹 clean）、`engine.js` 與 `data/drug_index.json` 的 SHA-256、Chromium 版本字串、兩側各輪原始值；且符合 §9.2 驗收 gate | 事後填寬鬆門檻；取單次最佳值；warm cache；拿不同輪次的 baseline 與候選互比；拿原型或 v0.3 數字充當 v0.4 結果；量完後又改 engine 或 index，數字不再屬於待合併版本 |
 | **F11a** | **legacy prior → columnar build**（首次遷移）：前次 index 是舊格式，本次產出 columnar。以實際缺少代號的資料斷言消失代號 guard **真的擋下來** | 只支援 columnar prior，首次遷移直接失敗 |
 | **F11b** | **columnar prior → columnar build**（穩定態）：第二次讀第一次產出的 `columnar/1`，同樣以缺代號資料斷言 guard 擋下；並驗 `min_row_pct_of_previous` 與 publish 差異判定仍運作 | 只驗「沒有拋例外」而不驗 guard 真的生效；或用 `.get()` 讓 `prev_codes` 成空集合後 build 照樣成功 |
-| **F12** | builder 全量驗證（§5.7，**接在 `build_price_history.py` 實際發布路徑上**，經完整 build 測，不是只測孤立 helper）：**validated drug count === 實際 `rows.length`**、**validated window count === 所有 `W.length` 的總和**（不是寫死的數字）。報告須輸出實際驗證筆數；45,179／45,258 僅作本次 oracle fixture 的預期值。另在**最後一個 drug row** 與**最後一個 window 列**各注入一次 **builder 層**錯誤，兩者都必須讓 build fail 且 `data/`、`status.json` 未變動。另斷言轉換器與 builder 呼叫的是**同一個** validator 函式 | 寫死筆數 ⇒ 資料成長後尾端完全不驗；或只輸出數字而未真的走到最後一列；validator 只接在轉換器（＝v0.3 的實際狀態）；兩份 validator 漂移 |
-| **F13** | runtime 判定關鍵欄：對 §4.1 表中每一欄，在**最後一個 drug row／最後一個 window 列**注入錯型別（含 window `flags` 為字串、`pricedBefore` 為字串、`historyCount` 為字串），經 app 實際載入路徑斷言：core 判 `invalid`、**不拋未捕捉例外**、搜尋不可用、無結果卡 | 判定關鍵欄只在 `prepareIndex` 單元測試驗、app 路徑仍 crash；只注入第一列 |
+| **F12** | builder 全量驗證（§5.7，**接在 `build_price_history.py` 實際發布路徑上**，經完整 build 測，不是只測孤立 helper）：**validated drug count === 實際 `rows.length`**、**validated window count === 所有 `W.length` 的總和**（不是寫死的數字）。報告須輸出實際驗證筆數；45,179／45,258 僅作本次 oracle fixture 的預期值。注入案例：在**第一個、中間一個、最後一個** drug row，以及**第一個、中間一個、最後一個** window 列，各注入一個**共通層**錯誤與一個 **builder 層**錯誤，每案都必須讓 build fail 且 `data/`、`status.json` 未變動。**成功基準**：同一套 fixture 不注入時 build 必須成功並輸出動態計數。另斷言轉換器與 builder 呼叫的是**同一個** validator 函式 | 寫死筆數 ⇒ 資料成長後尾端完全不驗；或只輸出數字而未真的走到最後一列；validator 只接在轉換器（＝v0.3 的實際狀態）；兩份 validator 漂移；只驗首尾兩列、計數直接回報 `rows.length`；發布路徑只跑 builder 層、共通層只在孤立測試跑；validator 一律拒絕 |
+| **F13** | runtime 判定關鍵欄，經 **app 實際載入路徑**（e2e）：對 §4.1 表中**每一欄**做**成對案例**——在最後一個 drug row／最後一個 window 列注入錯型別（含 window `flags` 為字串、`pricedBefore` 為字串、`historyCount` 為字串、`chName` 為 number；`priceState`／`eventType` 另含型別正確但不在值域），以及同位置的**合法鄰近值**（例如 `to: null`、`pricedBefore: null`、`flags: []`）。非法案例斷言：`state.core === 'error'`、`coreError.kind === 'invalid'`、搜尋輸入 disabled、結果區無結果卡、顯示核心錯誤訊息而非「查無結果」、**無未捕捉例外**（`pageerror` 為 0）。合法案例斷言：`state.core === 'ready'` 且可搜尋到該代號。前提：§9.2 驗收 gate | 判定關鍵欄只在 `prepareIndex` 單元測試驗、app 路徑仍 crash；只注入第一列；validator 一律拒絕讓所有負例自然通過；斷言錯的狀態名稱（`core === 'invalid'` 永遠不成立） |
 
 ---
 
@@ -719,7 +730,11 @@ PR 必須同時包含：轉換後的 `data/drug_index.json`、新 builder、新�
    v0.3 的 runtime 全量驗證，實質上是對同一份 builder 產物做第二次檢查
 2. CDN 混批（§8）只會造成 `indexFormat`／`dataVersion` 不符，不會產生 type 錯誤——
    前者已由 `version_mismatch` 處理，與 type 驗證無關
-3. 位置式格式最大的風險「單列錯位」**仍由 runtime 全量長度檢查擋住**（共通層）
+3. 位置式格式中**改變長度**的錯位（缺欄、多欄、整體位移）**仍由 runtime 全量長度檢查擋住**（共通層）。
+   **長度相同、型別相容的錯位**（例如 `chName`↔`enName` 互換）runtime 與 builder 的型別檢查**都擋不住**——
+   v0.3 的 runtime 全量 type 驗證同樣擋不住，所以不構成推翻 2.7 的反對理由。這類錯位的防線是
+   builder 的組 row 邏輯（`index_columnar` 依欄位常數取值）與 F1／F4 的逐筆等價，列為殘餘風險（§10）。
+   （v0.4 覆審 2.1：前版寫成「單列錯位由長度擋住」，說過頭）
 4. 儲存層／CDN 對合法值的竄改本來就不在覆蓋範圍（§10），v0.3 的 runtime type 驗證也擋不住
    「型別正確但值被換掉」
 
@@ -728,6 +743,9 @@ PR 必須同時包含：轉換後的 `data/drug_index.json`、新 builder、新�
 不同級，而它們的檢查都是 O(1) 的 `typeof`／`Array.isArray`／`Set.has`，
 預期遠小於 v0.3 被歸因的 271 ms（日期真實性、數字 finite、`isStrArray` 閉包）——
 **這是假設，由 F10 正式量測驗證，不以本段推論代替量測**。
+
+**驗收 gate**（v0.4 覆審 2.2）：F7a、F7b、F12、F13 與 F10 必須在**同一個 commit、同一份 `data/drug_index.json`** 上全綠；
+F10 的量測前提是該 commit 的 F12 已通過。任一者在之後的 commit 重跑失敗或未重跑，先前的 F10 數字作廢。
 
 **本案的新前提**：v0.3 從未把全量 type 驗證接上排程 build（§5.7）。**F12 必須先完成**，
 才能拿掉 runtime 的 type 驗證；順序顛倒的話，中間任何一個 commit 都處於「沒有任何一層驗 type」。
@@ -742,16 +760,19 @@ PR 必須同時包含：轉換後的 `data/drug_index.json`、新 builder、新�
   dataVersion 正確，但某個位置的值被替換」。**本次拒絕**：需改 `meta.json` 或引入額外 manifest，
   與本案非目標直接衝突。（覆審 4.5，判定：範圍蔓延）
 
-  **殘餘風險必須精確描述，不得宣稱已解決**：§5.3 全量 builder 驗證、§7.0 獨立 oracle、
+  **殘餘風險必須精確描述，不得宣稱已解決**。（v0.3 時的敘述，**v0.4 已由下段取代**：）§5.3 全量 builder 驗證、§7.0 獨立 oracle、
   §4.1.1 runtime 全量驗證，覆蓋的是**轉換器／builder／decoder 的系統性錯誤**；
   **不覆蓋**發布後儲存層或 CDN 對合法值的竄改（shape 正確、型別正確、版本正確，但值被換掉）。
   本案接受此殘餘風險。（第二輪 偏離 4）
 
-  **v0.4 新增的殘餘風險**：§5.7 builder 全量驗證、§7.0 獨立 oracle、§4.1 runtime 共通層，
-  覆蓋的是**轉換器／builder／decoder 的系統性錯誤**與**錯位**。runtime **不再覆蓋**
-  「builder validator 本身有漏洞，放行了非判定關鍵欄的 type 錯誤」——此時使用者會看到
-  錯誤的顯示值（例如價格欄顯示字串），但不會 crash、不會改變搜尋命中或隱藏判定（§4.1）。
-  防線是 F7b（Python 必須擋下每一類 builder 層錯誤）與 F12（尾端注入）。本案接受此殘餘風險。
+  **v0.4 現行敘述**（取代上段）：§5.7 builder 全量驗證、§7.0 獨立 oracle、§4.1 runtime 共通層，
+  覆蓋的是**轉換器／builder／decoder 的系統性錯誤**與**改變長度的錯位**。本案明確接受下列殘餘風險：
+  1. **builder validator 自身有漏洞**，放行了非判定關鍵欄的 type 錯誤——使用者會看到錯誤的顯示值
+     （例如價格欄顯示字串），但不會 crash、不會改變搜尋命中或隱藏判定（§4.1）。
+     防線是 F7b（逐欄完整矩陣）與 F12（首／中／尾注入）
+  2. **長度相同、型別相容的欄位錯位**（例如 `chName`↔`enName`）——runtime 與 builder 型別檢查都擋不住，
+     v0.3 亦然。防線是 builder 依欄位常數組 row 與 F1／F4 逐筆等價（v0.4 覆審 2.1）
+  3. 發布後儲存層或 CDN 對合法值的竄改（同 v0.3，第二輪 偏離 4）
 - 把 `manufacturer`／`atcCode` 移出 index 到 shard（實測另省 12.5%）
 
 ---
@@ -807,7 +828,7 @@ PR 必須同時包含：轉換後的 `data/drug_index.json`、新 builder、新�
 **狀態**：第二輪 0 Blocker、5 High，全屬條文精確化而非架構變更，
 **不觸發**再重審一輪的條件。v0.3 可進入 §6 原型階段。
 
-**v0.4（2026-10-13）** — B 方案重啟（使用者決策，§9.2）。**待 `/codex-checkplan` 覆審，覆審前不得動工**。
+**v0.4（2026-10-13）** — B 方案重啟（使用者決策，§9.2）。覆審修訂見下一張表。
 
 | 改動 | 依據 |
 |---|---|
@@ -820,3 +841,22 @@ PR 必須同時包含：轉換後的 `data/drug_index.json`、新 builder、新�
 | §7.1 F7 拆 F7a（共通層等價）／F7b（builder 層：Python 擋、JS 放行）；F10 對象改為 B 正式實作；F12 須接發布路徑並驗共用 validator；新增 F13（runtime 判定關鍵欄經 app 路徑不 crash） | 本版 |
 | §9.2 **新增**：重啟決策、推翻理由、F12 先於 runtime 精簡的順序 | 使用者決策 |
 | §10 新增 v0.4 殘餘風險 | 本版 |
+
+**v0.4 覆審修訂（2026-10-13）** — 依 `.ai-review/plan-verdict-index-format-v04.md`（接受 8／部分接受 1／拒絕 1）。
+
+| 改動 | 依據 |
+|---|---|
+| §4.1 判定關鍵欄補列 drug `chName`／`enName`／`ingredient`（haystack，靜默改變搜尋命中）；「不列入」清單改為逐欄列名 | 覆審 1.1 |
+| §4.1 新增「為什麼必須在載入期擋下」：ready 後的搜尋路徑沒有 catch | 覆審 1.2 |
+| §5.6 註明 F7b 的「JS 回 ok」是刻意的摩擦（拒絕改由 F10 守） | 覆審 4.1（拒絕） |
+| §9.2 第 3 點限縮為「改變長度的錯位」；同長度、型別相容的錯位改列殘餘風險 | 覆審 2.1 |
+| §9.2 新增驗收 gate：F7a／F7b／F12／F13／F10 須在同一 commit、同一份 index 上全綠 | 覆審 2.2 |
+| §10 改為單一現行敘述，v0.3 段標為歷史；殘餘風險分三項列出 | 覆審 2.3、2.1 |
+| F7a 補 code 型別反例、正例、reason 優先序組合矩陣 | 覆審 3.1 |
+| F7b 改為逐欄 × 逐性質的完整矩陣，每案只破壞一個性質，另加合法邊界正例 | 覆審 3.2 |
+| F10 驗收紀錄須綁定 commit、`engine.js`／index 的 SHA-256、Chromium 版本、原始值 | 覆審 3.3（部分接受） |
+| F12 改為首／中／尾 × 共通層／builder 層注入，加成功基準 | 覆審 3.4 |
+| F13 改為逐欄成對案例；斷言改用實際狀態 `core === 'error'`＋`coreError.kind === 'invalid'`、`pageerror` 為 0 | 覆審 3.5、1.2 |
+
+**狀態**：0 Blocker；2 High 都是補漏和論據限縮，架構不變，**不觸發重審**。**v0.4 可動工**。
+
