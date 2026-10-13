@@ -1,4 +1,4 @@
-"""legacy `drug_index.json` → `columnar/1`（spec-index-format.md v0.3）。
+"""legacy `drug_index.json` → `columnar/1`（spec-index-format.md v0.4）。
 
 用法：
     uv run python scripts/convert_index_columnar.py <in.json> <out.json>
@@ -10,7 +10,6 @@ fail-closed（§5.3）：任何輸入格式、schema、round-trip 或 determinis
 from __future__ import annotations
 
 import json
-import re
 import sys
 
 # 繁中 Windows 的 stdout 預設跟著主控台字碼頁走（CP950），印 U+2713 之類的字元會
@@ -19,131 +18,40 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
-from datetime import date
 from pathlib import Path
 
-INDEX_FORMAT = "columnar/1"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from lib import index_format  # noqa: E402  ——validator 只有一份（§5.7），不在此另寫
 
-# §3.3 前綴欄位，順序即位置
-FIELDS = [
-    "code", "chName", "enName", "ingredient", "dosageForm", "strength", "strengthUnit",
-    "atcCode", "manufacturer", "firstEffectiveDate", "lastPriceChangeDate",
-    "historyCount", "priceChangeCount", "flags",
-]
-WINDOW_FIELDS = [
-    "from", "to", "price", "rawPrice", "previousPrice", "pricedBefore", "priceState",
-    "eventType", "crossesStop", "changeFlag", "absoluteChange", "percentChange", "flags",
-]
-
-# §3.3.1 值域——由規格列舉，不引用實作檔
-PRICE_STATES = {"priced", "terminated", "suspended", "missing", "malformed"}
-EVENT_TYPES = {"initial", "unknown", "unchanged", "terminated", "suspended",
-               "increase", "decrease", "relisted", "first_priced"}
-
-DATE_FIELDS_DRUG = {"firstEffectiveDate", "lastPriceChangeDate"}
-DATE_FIELDS_WIN = {"from", "to"}
-NULLABLE_DRUG = {"lastPriceChangeDate"}
-NULLABLE_WIN = {"to", "price", "previousPrice", "pricedBefore", "absoluteChange", "percentChange"}
-
-ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+INDEX_FORMAT = index_format.INDEX_FORMAT
+FIELDS = index_format.FIELDS
+WINDOW_FIELDS = index_format.WINDOW_FIELDS
 
 
 class ConvertError(Exception):
     """任何一種失敗都用它；呼叫端一律不寫出結果。"""
 
 
-def is_calendar_date(v) -> bool:
-    """真實日曆日，不只是外形（§3.3.2）。`2027-02-30` 與 `20260911` 都要拒絕。"""
-    if not isinstance(v, str) or not ISO.match(v):
-        return False
-    y, m, d = (int(x) for x in v.split("-"))
-    try:
-        date(y, m, d)
-    except ValueError:
-        return False
-    return True
+def check_legacy_keys(d, i: int) -> None:
+    """legacy 物件的 key 完整性（§3.4）。
 
-
-def is_finite_number(v) -> bool:
-    """number 且有限；**排除 bool**——Python 的 bool 是 int 子型別（§3.3.2）。"""
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        return False
-    return v == v and v not in (float("inf"), float("-inf"))
-
-
-def is_int(v) -> bool:
-    return isinstance(v, int) and not isinstance(v, bool)
-
-
-def _check_str(val, key, where, *, nullable=False, calendar=False):
-    if val is None:
-        if not nullable:
-            raise ConvertError(f"{where}: {key} 不得為 null")
-        return
-    if not isinstance(val, str):
-        raise ConvertError(f"{where}: {key} 型別錯（期望 string，實得 {type(val).__name__}）")
-    if calendar and not is_calendar_date(val):
-        raise ConvertError(f"{where}: {key} 不是真實日曆日 -> {val!r}")
-
-
-def validate_drug(d: dict, i: int) -> None:
+    只有這件事屬於轉換器：columnar 是位置式，表達不出「缺 key」，轉換後就驗不到了。
+    型別、值域、日曆日一律交給轉換後的 `index_format.validate_index`。
+    """
     where = f"drugs[{i}]"
     if not isinstance(d, dict):
         raise ConvertError(f"{where}: 不是 object")
-
     for k in FIELDS:
-        if k not in d:                                   # §3.4 缺 key ＝ 失敗
+        if k not in d:
             raise ConvertError(f"{where}: 缺少欄位 {k}")
-    if "window" not in d:
-        raise ConvertError(f"{where}: 缺少 window")
-
-    for k in FIELDS:
-        v = d[k]
-        if k in ("historyCount", "priceChangeCount"):
-            if not is_int(v) or v < 0:
-                raise ConvertError(f"{where}: {k} 必須是非負整數（且非 bool）-> {v!r}")
-        elif k == "flags":
-            if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
-                raise ConvertError(f"{where}: flags 必須是 array of string")
-        else:
-            _check_str(v, k, where,
-                       nullable=k in NULLABLE_DRUG,
-                       calendar=k in DATE_FIELDS_DRUG)
-
-    if not d["code"]:
-        raise ConvertError(f"{where}: code 不得為空字串")
-
-    w = d["window"]
-    if not isinstance(w, list):
-        raise ConvertError(f"{where}: window 必須是陣列")
-    for r_i, r in enumerate(w):
-        rw = f"{where}.window[{r_i}]"
+    if not isinstance(d.get("window"), list):
+        raise ConvertError(f"{where}: 缺少 window 或不是陣列")
+    for r_i, r in enumerate(d["window"]):
         if not isinstance(r, dict):
-            raise ConvertError(f"{rw}: 不是 object")
+            raise ConvertError(f"{where}.window[{r_i}]: 不是 object")
         for k in WINDOW_FIELDS:
             if k not in r:
-                raise ConvertError(f"{rw}: 缺少欄位 {k}")
-        for k in WINDOW_FIELDS:
-            v = r[k]
-            if k in ("price", "previousPrice", "pricedBefore", "absoluteChange", "percentChange"):
-                if v is not None and not is_finite_number(v):
-                    raise ConvertError(f"{rw}: {k} 必須是有限 number 或 null -> {v!r}")
-            elif k == "crossesStop":
-                if not isinstance(v, bool):
-                    raise ConvertError(f"{rw}: crossesStop 必須是 boolean")
-            elif k == "flags":
-                if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
-                    raise ConvertError(f"{rw}: flags 必須是 array of string")
-            elif k == "priceState":
-                if v not in PRICE_STATES:
-                    raise ConvertError(f"{rw}: priceState 不在值域 -> {v!r}")
-            elif k == "eventType":
-                if v not in EVENT_TYPES:
-                    raise ConvertError(f"{rw}: eventType 不在值域 -> {v!r}")
-            else:
-                _check_str(v, k, rw,
-                           nullable=k in NULLABLE_WIN,
-                           calendar=k in DATE_FIELDS_WIN)
+                raise ConvertError(f"{where}.window[{r_i}]: 缺少欄位 {k}")
 
 
 def to_columnar(legacy: dict) -> dict:
@@ -160,27 +68,25 @@ def to_columnar(legacy: dict) -> dict:
         raise ConvertError("drugs 為空——空 index 會把資料故障偽裝成零結果（§3.5）")
 
     rows = []
-    seen_prev = ""
     for i, d in enumerate(drugs):
-        validate_drug(d, i)
-        code = d["code"]
-        if code <= seen_prev:                            # §3.5 嚴格遞增＋唯一
-            raise ConvertError(
-                f"drugs[{i}]: code 未嚴格遞增（{seen_prev!r} -> {code!r}）；"
-                "重複或未排序都不合契約")
-        seen_prev = code
+        check_legacy_keys(d, i)
         rows.append(
             [d[k] for k in FIELDS]
             + [[[r[k] for k in WINDOW_FIELDS] for r in d["window"]]]
         )
 
-    return {
+    col = {
         "dataVersion": legacy["dataVersion"],
         "indexFormat": INDEX_FORMAT,
         "fields": list(FIELDS),
         "windowFields": list(WINDOW_FIELDS),
         "rows": rows,
     }
+    # 排序、唯一、型別、值域、日曆日全部由共用 validator 判（共通層＋builder 層）
+    res = index_format.validate_index(col)
+    if not res.ok:
+        raise ConvertError(f"轉換結果不合法（{res.reason}）：{res.error}")
+    return col
 
 
 def to_legacy(col: dict) -> dict:

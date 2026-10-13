@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from lib import history, nhi
+from lib import history, index_format, nhi
 from lib.golden import GOLDEN_CODES
 
 for _stream in (sys.stdout, sys.stderr):
@@ -131,18 +131,11 @@ def shard_versions(shards):
 
 
 # ── columnar/1 表示法（spec-index-format.md §3）────────────────
-# 這三個常數與 engine.js 的 INDEX_FORMAT／INDEX_FIELDS／INDEX_WINDOW_FIELDS
-# 以及 scripts/convert_index_columnar.py 必須逐字相同；漂移由測試擋。
-INDEX_FORMAT = "columnar/1"
-INDEX_FIELDS = [
-    "code", "chName", "enName", "ingredient", "dosageForm", "strength", "strengthUnit",
-    "atcCode", "manufacturer", "firstEffectiveDate", "lastPriceChangeDate",
-    "historyCount", "priceChangeCount", "flags",
-]
-INDEX_WINDOW_FIELDS = [
-    "from", "to", "price", "rawPrice", "previousPrice", "pricedBefore", "priceState",
-    "eventType", "crossesStop", "changeFlag", "absoluteChange", "percentChange", "flags",
-]
+# 常數與 validator 只有一份，在 lib/index_format.py（§5.7）；engine.js 的同名常數由
+# tests/fixtures/index_format_cases.json 兩端各自比對擋漂移。
+INDEX_FORMAT = index_format.INDEX_FORMAT
+INDEX_FIELDS = index_format.FIELDS
+INDEX_WINDOW_FIELDS = index_format.WINDOW_FIELDS
 
 
 def index_columnar(index_drugs, version):
@@ -406,11 +399,19 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
     new_codes = {d["code"] for d in index_drugs}
     shard_files = {k: v for k, v in files.items() if k.startswith("history/")}
 
+    # §5.7 發布路徑全量驗證：對象是**實際要寫出的 bytes**，不是組 row 前的 dict——
+    # 後者驗不到「組 row 時欄位順序錯」。runtime 只驗結構＋判定關鍵欄，逐欄 type 的防線就在這裡。
+    index_check = index_format.validate_index(
+        json.loads(files["drug_index.json"]),
+        {"dataVersion": version, "uniqueDrugCodeCount": stats["uniqueDrugCodeCount"]})
+
     errors, warnings, overridden = check_guards(
         stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
         upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes,
         index_bytes=files["drug_index.json"])
     warnings += golden_rewrites(shards, fixtures_dir)
+    if not index_check.ok:
+        errors.append(f"drug_index.json 驗證失敗（{index_check.reason}）：{index_check.error}")
     if errors:
         raise BuildError(errors, warnings)
 
@@ -458,6 +459,7 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
     publish(data_dir, files, existing, meta_bytes, status_bytes, upcoming_bytes)
     return {"changed": changed, "dataVersion": version, "stats": stats,
             "warnings": warnings, "overridden": overridden, "upcomingMigration": migration,
+            "indexValidated": {"drugs": index_check.drugs, "windows": index_check.windows},
             "sizes": {k: (len(v), gzip_size(v))
                       for k, v in {**files, "upcoming.json": upcoming_bytes}.items()}}
 
@@ -515,13 +517,16 @@ def main(argv=None, cfg=GuardConfig()):
           f"資料{'有變動' if result['changed'] else '無變動'}（{result['dataVersion'][:19]}…）")
     for m in result["warnings"]:
         print(f"⚠ {m}", file=sys.stderr)
-    largest = sorted(result["sizes"].items(), key=lambda kv: -kv[1][1])[:3]
+    iv = result["indexValidated"]       # F12：實際走訪的筆數，不是 len(rows)
+    print(f"  drug_index.json 全量驗證：drug rows {iv['drugs']:,} 筆、window 列 {iv['windows']:,} 列")
+    largest =sorted(result["sizes"].items(), key=lambda kv: -kv[1][1])[:3]
     for path, (raw_size, gz) in largest:
         print(f"  {path}: raw {raw_size / 1e6:.2f} MB / gzip {gz / 1e6:.2f} MB")
     step_summary(
         [f"## ✓ 建置完成（資料{'有變動' if result['changed'] else '無變動'}）",
          f"- 來源列數 {s['sourceRowCount']:,}；代號 {s['uniqueDrugCodeCount']:,}；"
          f"invalidRecords {s.get('invalidRecords', 0)}；malformed {s.get('malformedPriceRows', 0)}",
+         f"- index 全量驗證 drug rows {iv['drugs']:,}／window 列 {iv['windows']:,}",
          f"- 預告 {s.get('upcomingRows', 0):,} 列 / {s.get('upcomingCodes', 0):,} 個代號"
          f"{'（首次交付或規則遷移，強制重產）' if result['upcomingMigration'] else ''}"]
         + [f"- ⚠ {m}" for m in result["warnings"]])

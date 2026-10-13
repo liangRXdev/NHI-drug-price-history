@@ -317,9 +317,15 @@ render **拋例外**、**靜默改變判定**，或**未經 `esc` 進入 innerHT
 **判定順序**（須有測試釘住，JS 與 Python 必須一致）：
 
 1. **最小結構前提**：`index` 必須是 object（非 `null`、非陣列）、
-   `index.dataVersion` 必須是字串、`index.indexFormat` 必須是字串。
+   `index.dataVersion` 必須是字串。
    任一不成立 → **`invalid`**（不可越過此步逕判 mismatch，否則 `null` 會被誤歸版本問題）
-2. `indexFormat` 不等於期望值 → **`version_mismatch`**
+2. `indexFormat` **缺漏、非字串或**不等於期望值 → **`version_mismatch`**
+
+> **v0.4 實作時更正**：v0.3 的第 1 步另要求「`indexFormat` 必須是字串」，使缺 `indexFormat`
+> 的 legacy index 判成 `invalid`。這與 §3.6（缺漏或不等於期望值 → mismatch）、§8 混批矩陣
+> （新前端＋legacy index → mismatch「請重新整理」）、F5（缺漏／錯值／非字串都提供 reload）
+> 三處矛盾，且讓 CDN 混批的可自癒情況顯示成「內容不合法」。依三處一致的條文更正第 1 步。
+> `null`／陣列／缺 `dataVersion` 仍在第 1 步判 `invalid`，第二輪 2.5 的顧慮不受影響。
 3. `index.dataVersion !== meta.dataVersion` → **`version_mismatch`**
 4. 其餘 schema、shape、排序、唯一性檢查 → **`invalid`**
 
