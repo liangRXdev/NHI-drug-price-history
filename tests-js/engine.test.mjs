@@ -515,8 +515,12 @@ test('shardPrefix 以最長符合前綴選檔，不寫死長度', () => {
 });
 
 test('E6 混批：index↔meta、shard↔meta 版本不一致 → version_mismatch', () => {
-  const meta = { dataVersion: 'v1', shards: { files: ['AC48'], versions: { AC48: 's1' } } };
+  const meta = { dataVersion: 'v1', shards: { files: ['AC48'], versions: { AC48: 's1' } }, uniqueDrugCodeCount: 1 };
   assert.ok(validateMeta(meta).ok);
+  // §3.5：uniqueDrugCodeCount 屬 meta 共通 schema——缺漏、非正整數、boolean 都是 invalid
+  for (const bad of [undefined, 0, -1, 1.5, '1', true, null]) {
+    assert.equal(validateMeta({ ...meta, uniqueDrugCodeCount: bad }).ok, false, String(bad));
+  }
   const idx = (dataVersion, extra = {}) => ({
     dataVersion, indexFormat: INDEX_FORMAT,
     fields: [...INDEX_FIELDS], windowFields: [...INDEX_WINDOW_FIELDS],
@@ -528,7 +532,8 @@ test('E6 混批：index↔meta、shard↔meta 版本不一致 → version_mismat
   assert.ok(validateIndex(idx('v1'), meta1).ok);
   // 表示法不符 → mismatch（可自癒，「請重新整理」），不是 invalid（「無法查詢」）
   assert.equal(validateIndex(idx('v1', { indexFormat: 'columnar/0' }), meta1).reason, 'version_mismatch');
-  assert.equal(validateIndex({ dataVersion: 'v1', drugs: [] }, meta1).reason, 'invalid');
+  // legacy index（無 indexFormat）＝新前端＋舊 index 的混批 → 可自癒的 mismatch（§3.6、§8）
+  assert.equal(validateIndex({ dataVersion: 'v1', drugs: [] }, meta1).reason, 'version_mismatch');
   // 最小結構前提排在版本判定之前：null／陣列不得被誤歸成版本問題
   for (const bad of [null, [], 'x', { indexFormat: INDEX_FORMAT }]) {
     assert.equal(validateIndex(bad, meta1).reason, 'invalid');

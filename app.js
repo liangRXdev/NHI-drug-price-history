@@ -117,8 +117,10 @@ async function loadCore() {
     if (vi.reason === 'version_mismatch') next = { core: 'mismatch' };
     else if (!vi.ok) throw new LoadError('invalid', 'drug_index.json 內容不合法');
     else {
-      // prepareIndex 會在必經 traversal 中做全量 shape／type 驗證，失敗時丟
-      // IndexShapeError，由下方 catch 轉成 invalid（spec-index-format.md §4.1.1）
+      // prepareIndex 在必經 traversal 中全量驗「結構＋判定關鍵欄」，失敗時丟
+      // IndexShapeError，由下方 catch 轉成 invalid（spec-index-format.md v0.4 §4.1）。
+      // 判定關鍵欄必須在這裡擋下：進入 ready 後的搜尋路徑沒有 catch
+      
       const prepared = E.prepareIndex(index);
       next = {
         core: 'ready', meta,
@@ -135,6 +137,9 @@ async function loadCore() {
 
   state.core = next.core;
   state.coreError = next.coreError || null;
+  // 純觀測用（e2e F5／F13 斷言實際狀態，而非只看文案）；不參與任何判定
+  document.documentElement.dataset.core = state.core;
+  document.documentElement.dataset.coreError = state.coreError?.kind || '';
   if (next.core === 'ready') {
     state.meta = next.meta;
     state.prepared = next.prepared;

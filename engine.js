@@ -377,18 +377,17 @@ export function searchCard(drug, T) {
 /** §4.1 的逐筆檢查失敗時丟這個；呼叫端一律轉成 `invalid`。 */
 export class IndexShapeError extends Error {}
 
-const isFiniteNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const isNonNegInt = (v) => Number.isInteger(v) && v >= 0;
-const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
-
 /**
- * columnar/1 → 搜尋所需的三個平行陣列，**並在同一趟走訪完成全量 shape／type 驗證**。
+ * columnar/1 → 搜尋所需的平行陣列，**並在同一趟走訪完成 §4.1 共通層的全量驗證**。
  *
- * 不還原成物件陣列（方案 (b)）：2026-09-23 實測，還原 45,179 個物件要多付 230 ms，
- * 會把下載省下的優勢吃掉大半（spec-index-format.md §9）。
+ * runtime 只驗「結構＋判定關鍵欄」（spec-index-format.md v0.4 §4.1、§9.2）：
+ * 會 crash、靜默改變搜尋命中／隱藏判定、或未經 esc 進 innerHTML 的欄位才在這裡驗。
+ * 日期是否為真實日曆日、數字是否 finite、字串欄型別等**刻意不驗**——那是 builder 的
+ * 全量驗證（lib/index_format.py，§5.7），F7b 釘住這裡必須放行。v0.3 在此全量驗 type，
+ * 多付 271 ms 而未達 F10 門檻（§9.1）；要把任何檢查移回來，先修訂 §4.1 並重量 F10。
  *
- * `rows` 的排序是契約（§3.5），不是巧合——這裡只驗不排序。
- * 舊版在此處有 fallback sort，columnar/1 下未排序一律視為資料違約。
+ * 不還原成物件陣列（方案 (b)）：還原 45,179 個物件要多付 230 ms（§9）。
+ * `rows` 的排序是契約（§3.5），這裡只驗不排序。
  */
 export function prepareIndex(index) {
   const SEP = '\u0001';     // 欄位分隔：避免查詢字串跨欄位邊界誤中
@@ -406,32 +405,12 @@ export function prepareIndex(index) {
   const iHist = INDEX_FIELDS.indexOf('historyCount');
   const iPcc = INDEX_FIELDS.indexOf('priceChangeCount');
   const iFlags = INDEX_FIELDS.indexOf('flags');
-  const iLpcd = INDEX_FIELDS.indexOf('lastPriceChangeDate');
-  const iFed = INDEX_FIELDS.indexOf('firstEffectiveDate');
-  // 字串欄位的位置一次算好——放在迴圈內會變成 45,179 × 5 次 indexOf 加建陣列
-  const STR_COLS = ['chName', 'enName', 'ingredient', 'dosageForm', 'strength',
-    'strengthUnit', 'atcCode', 'manufacturer'].map((k) => INDEX_FIELDS.indexOf(k));
-  // 日期字串重複度極高（4.5 萬列只有數百個相異值），逐次 split＋new Date 是純浪費
-  const dateSeen = new Set();
-  const okDate = (v) => {
-    if (dateSeen.has(v)) return true;
-    if (!isCalendarDate(v)) return false;
-    dateSeen.add(v);
-    return true;
-  };
 
   const wFrom = INDEX_WINDOW_FIELDS.indexOf('from');
   const wTo = INDEX_WINDOW_FIELDS.indexOf('to');
-  const wPrice = INDEX_WINDOW_FIELDS.indexOf('price');
-  const wRaw = INDEX_WINDOW_FIELDS.indexOf('rawPrice');
-  const wPrev = INDEX_WINDOW_FIELDS.indexOf('previousPrice');
   const wPb = INDEX_WINDOW_FIELDS.indexOf('pricedBefore');
   const wState = INDEX_WINDOW_FIELDS.indexOf('priceState');
   const wEvent = INDEX_WINDOW_FIELDS.indexOf('eventType');
-  const wCross = INDEX_WINDOW_FIELDS.indexOf('crossesStop');
-  const wChg = INDEX_WINDOW_FIELDS.indexOf('changeFlag');
-  const wAbs = INDEX_WINDOW_FIELDS.indexOf('absoluteChange');
-  const wPct = INDEX_WINDOW_FIELDS.indexOf('percentChange');
   const wFlags = INDEX_WINDOW_FIELDS.indexOf('flags');
 
   const codes = new Array(n);
@@ -447,34 +426,33 @@ export function prepareIndex(index) {
     if (code <= prev) throw new IndexShapeError(`rows[${i}] code 未嚴格遞增`);
     prev = code;
 
-    for (let q = 0; q < STR_COLS.length; q++) {
-      const j = STR_COLS[q];
-      if (typeof r[j] !== 'string') throw new IndexShapeError(`rows[${i}] ${F[j]} 型別錯`);
+    const ch = r[iCh];
+    const en = r[iEn];
+    const ing = r[iIng];
+    // haystack：非字串會被模板字串轉成 "[object Object]" 之類而可被搜到（v0.4 覆審 1.1）
+    if (typeof ch !== 'string' || typeof en !== 'string' || typeof ing !== 'string') {
+      throw new IndexShapeError(`rows[${i}] 搜尋欄位非字串`);
     }
-    if (!okDate(r[iFed])) throw new IndexShapeError(`rows[${i}] firstEffectiveDate 非日曆日`);
-    if (r[iLpcd] !== null && !okDate(r[iLpcd])) throw new IndexShapeError(`rows[${i}] lastPriceChangeDate 非法`);
-    if (!isNonNegInt(r[iHist]) || !isNonNegInt(r[iPcc])) throw new IndexShapeError(`rows[${i}] count 非非負整數`);
-    if (!isStrArray(r[iFlags])) throw new IndexShapeError(`rows[${i}] flags 非字串陣列`);
+    // 搜尋結果 render 未經 esc 直接插入
+    if (typeof r[iHist] !== 'number' || typeof r[iPcc] !== 'number') throw new IndexShapeError(`rows[${i}] count 非 number`);
+    if (!Array.isArray(r[iFlags])) throw new IndexShapeError(`rows[${i}] flags 非陣列`);   // flagTags 的 .map
 
     const w = r[N];
     if (!Array.isArray(w)) throw new IndexShapeError(`rows[${i}] window 非陣列`);
     for (let k = 0; k < w.length; k++) {
       const wr = w[k];
       if (!Array.isArray(wr) || wr.length !== M) throw new IndexShapeError(`rows[${i}].window[${k}] 長度不符`);
-      if (!okDate(wr[wFrom])) throw new IndexShapeError(`rows[${i}].window[${k}] from 非日曆日`);
-      if (wr[wTo] !== null && !okDate(wr[wTo])) throw new IndexShapeError(`rows[${i}].window[${k}] to 非法`);
-      for (const q of [wPrice, wPrev, wPb, wAbs, wPct]) {
-        if (wr[q] !== null && !isFiniteNum(wr[q])) throw new IndexShapeError(`rows[${i}].window[${k}] ${W[q]} 非有限數`);
-      }
-      if (typeof wr[wRaw] !== 'string' || typeof wr[wChg] !== 'string') throw new IndexShapeError(`rows[${i}].window[${k}] 字串欄位型別錯`);
-      if (typeof wr[wCross] !== 'boolean') throw new IndexShapeError(`rows[${i}].window[${k}] crossesStop 非布林`);
+      // 判定關鍵欄：ready 後的搜尋路徑沒有 catch，漏到那裡就是未捕捉例外（§4.1）
       if (!PRICE_STATES.has(wr[wState])) throw new IndexShapeError(`rows[${i}].window[${k}] priceState 不在值域`);
       if (!EVENT_TYPES.has(wr[wEvent])) throw new IndexShapeError(`rows[${i}].window[${k}] eventType 不在值域`);
-      if (!isStrArray(wr[wFlags])) throw new IndexShapeError(`rows[${i}].window[${k}] flags 非字串陣列`);
+      if (!Array.isArray(wr[wFlags])) throw new IndexShapeError(`rows[${i}].window[${k}] flags 非陣列`);
+      if (typeof wr[wFrom] !== 'string') throw new IndexShapeError(`rows[${i}].window[${k}] from 非字串`);
+      if (wr[wTo] !== null && typeof wr[wTo] !== 'string') throw new IndexShapeError(`rows[${i}].window[${k}] to 非字串`);
+      if (wr[wPb] !== null && typeof wr[wPb] !== 'number') throw new IndexShapeError(`rows[${i}].window[${k}] pricedBefore 非 number`);
     }
 
     codes[i] = code.toLowerCase();
-    hays[i] = `${code}${SEP}${r[iCh]}${SEP}${r[iEn]}${SEP}${r[iIng]}`.toLowerCase();
+    hays[i] = `${code}${SEP}${ch}${SEP}${en}${SEP}${ing}`.toLowerCase();
   }
 
   /** 第 i 筆的 window 列，轉成判定函式看得懂的物件。只在需要時建，不預先全量建。 */
@@ -573,7 +551,10 @@ const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
 export function validateMeta(meta) {
   if (!isObj(meta) || typeof meta.dataVersion !== 'string' || !isObj(meta.shards)
-      || !Array.isArray(meta.shards.files) || !isObj(meta.shards.versions)) {
+      || !Array.isArray(meta.shards.files) || !isObj(meta.shards.versions)
+      // §3.5：validateIndex 拿它比對 rows.length，不在這裡驗就是引用一個不保證存在的欄位。
+      // Number.isInteger(true) 為 false，boolean 自然被排除
+      || !Number.isInteger(meta.uniqueDrugCodeCount) || meta.uniqueDrugCodeCount <= 0) {
     return { ok: false, reason: 'invalid' };
   }
   return { ok: true };
@@ -613,10 +594,10 @@ const prefixMatches = (arr, want) => Array.isArray(arr)
  */
 export function validateIndex(index, meta) {
   // 1. 最小可比較前提——不可越過此步逕判 mismatch
-  if (!isObj(index) || typeof index.dataVersion !== 'string' || typeof index.indexFormat !== 'string') {
+  if (!isObj(index) || typeof index.dataVersion !== 'string') {
     return { ok: false, reason: 'invalid' };
   }
-  // 2、3. 版本
+  // 2、3. 版本。缺 indexFormat＝legacy index（CDN 混批），必須是可自癒的 mismatch（§3.6、§8）
   if (index.indexFormat !== INDEX_FORMAT) return { ok: false, reason: 'version_mismatch' };
   if (meta && index.dataVersion !== meta.dataVersion) return { ok: false, reason: 'version_mismatch' };
   // 4. schema
@@ -744,8 +725,8 @@ export function niceTicks(min, max, n = 5) {
 // 前後的 dataVersion 相同，少了這個欄位就分不出舊規則產物（§3.3.2）。
 export const UPCOMING_GENERATOR_VERSION = 'upcoming/1';
 
-const PRICE_STATES = new Set(['priced', 'terminated', 'suspended', 'missing', 'malformed']);
-const EVENT_TYPES = new Set(['initial', 'unknown', 'unchanged', 'terminated', 'suspended',
+export const PRICE_STATES = new Set(['priced', 'terminated', 'suspended', 'missing', 'malformed']);
+export const EVENT_TYPES = new Set(['initial', 'unknown', 'unchanged', 'terminated', 'suspended',
   'increase', 'decrease', 'relisted', 'first_priced']);
 export const UPCOMING_META_FIELDS = ['chName', 'enName', 'ingredient', 'strength',
   'strengthUnit', 'dosageForm', 'atcCode', 'manufacturer'];
