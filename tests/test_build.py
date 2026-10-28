@@ -696,3 +696,57 @@ def test_upcoming_guards_warn_but_never_fail():
 def test_upcoming_validation_errors_are_build_errors():
     errors, _, _ = errors_for(stats(), upcoming_errors=["items[0] code 為空字串"])
     assert any("upcoming.json 驗證失敗" in e for e in errors)
+
+
+# ── M3 非必要描述欄位消失不可靜默 ───────────────────────────────
+NAME_HEADERS = {"chName": "藥品中文名稱", "enName": "藥品英文名稱", "ingredient": "成分"}
+
+
+@pytest.mark.parametrize("key", list(NAME_HEADERS))
+def test_missing_descriptive_column_warns(tmp_path, key, capsys):
+    """來源改版拿掉品名／成分欄：不 fail（非必要欄位），但必須 WARNING 且進 build 警告清單。"""
+    header = [h for h in HEADER if h != NAME_HEADERS[key]]
+    raw = rows_to_csv([make_row(code=f"A{i:09d}") for i in range(3)], header=header)
+    result = build(tmp_path, raw=raw)
+    err = capsys.readouterr().err
+    assert "WARNING" in err and NAME_HEADERS[key] in err
+    assert any(NAME_HEADERS[key] in w for w in result["warnings"])
+
+
+def test_meta_records_blank_rows_of_name_fields(tmp_path):
+    rows = [make_row(code="A000000100"), make_row(code="A000000200", chName="", ingredient="")]
+    build(tmp_path, raw=rows_to_csv(rows))
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert meta["blankFieldRows"] == {"chName": 1, "enName": 0, "ingredient": 1}
+
+
+def blank_stats(rows, **blank):
+    return {**stats(rows=rows), "blankFieldRows": {"chName": 0, "enName": 0, "ingredient": 0, **blank}}
+
+
+@pytest.mark.parametrize("new,prev,fails", [
+    (blank_stats(200_000, chName=10_020), blank_stats(200_000), True),          # +5.01 pt
+    (blank_stats(200_000, chName=10_000), blank_stats(200_000), False),         # +5.00 pt：邊界通過
+    (blank_stats(200_000, ingredient=30_000), blank_stats(200_000, ingredient=20_000), False),  # +5.00
+    (blank_stats(200_000, ingredient=30_002), blank_stats(200_000, ingredient=20_000), True),
+    (blank_stats(100_000, enName=5_001), blank_stats(200_000), True),           # 分母不同：比例比較
+    (blank_stats(200_000), blank_stats(200_000, chName=50_000), False),         # 改善不擋
+    (blank_stats(200_000, chName=200_000), stats(rows=200_000), False),         # 前版無基準：只警告
+])
+def test_blank_rate_jump_guard(new, prev, fails):
+    errors, warnings, _ = errors_for(new, prev_meta=prev)
+    assert bool(errors) == fails, errors
+    if fails:
+        assert any("空白率" in e for e in errors)
+
+
+def test_blank_rate_guard_is_not_overridable():
+    """spec §14：只有兩條語意 guard 可人工放行；本條不在其列。"""
+    errors, _, _ = errors_for(blank_stats(200_000, chName=20_000), prev_meta=blank_stats(200_000),
+                              allow=True)
+    assert any("空白率" in e for e in errors)
+
+
+def test_whole_column_blank_warns_even_without_baseline():
+    _, warnings, _ = errors_for(blank_stats(200_000, enName=200_000))
+    assert any("enName" in w or "藥品英文名稱" in w for w in warnings)

@@ -193,6 +193,9 @@ def parse_csv(raw):
         fieldnames = reader.fieldnames or []
         mapping = {key: detect_field(fieldnames, pats, req)
                    for key, (pats, req) in FIELDS.items()}
+        for key, src in mapping.items():
+            if src is None:   # 非必要欄位找不到：不擋 build，但不可靜默（下游會整欄空白）
+                log(f"  ⚠ WARNING：找不到非必要欄位「{FIELDS[key][0][0]}」（{key}），該欄將全部空白")
         rows = []
         for lineno, r in enumerate(reader, start=2):
             if None in r or any(v is None for v in r.values()):
