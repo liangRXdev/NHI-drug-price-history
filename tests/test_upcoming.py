@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -14,7 +15,7 @@ import pytest
 
 from build_price_history import build_outputs
 from lib import history, nhi
-from tests.helpers import SNAPSHOT, make_row
+from tests.helpers import SNAPSHOT, make_row, rows_to_csv
 
 D = date(2026, 9, 11)
 ROOT = Path(__file__).resolve().parent.parent
@@ -142,29 +143,80 @@ def test_u2_fully_identical_rows_are_deduplicated_not_doubled():
     assert len(by_code(upcoming(rows), "M000000100")) == 1
 
 
-def test_u2_real_data_upcoming_matches_history_for_every_code():
-    """全量資料正對照：已發布的 upcoming.json 必須逐代號等於 history 分片的**全部**未生效列。
+# 全量對帳（M4）：原本在 pytest 內直接讀 repo 的 data/（已發布活資料），而 workflow 在
+# build **之前**跑 pytest——驗的是上一批產物，且未生效列自然歸零時會讓建置前測試失敗
+# （2026-10-04 排程即卡在 Run unit tests）。改為 build 後、commit 前對新產物執行
+# scripts/verify_upcoming.py；這裡只驗對帳器本身。
+MULTI_OTHER = [
+    make_row(code="N000000100", price="20.00", frm="1090101", to="1151031"),
+    make_row(code="N000000100", price="19.00", frm="1151101", to="9991231"),
+]
 
-    快照 11 碼無一有多筆未生效列（§9.1），只靠合成 fixture 無法證明正式產物沒漏。
-    母體不寫死代號：未生效列會隨時間生效，寫死的「多筆案例」每次資料更新都可能失格
-    （2026-10-04 原 3 碼全數降為 1 筆）。改為全代號雙向對帳，多筆案例有幾個就驗幾個。
-    """
-    published = json.loads((ROOT / "data" / "upcoming.json").read_text(encoding="utf-8"))
-    build_date = published["buildDate"]
-    expected = {}
-    for path in sorted((ROOT / "data" / "history").glob("*.json")):
-        shard = json.loads(path.read_text(encoding="utf-8"))
-        for code, drug in shard["drugs"].items():
-            rows = [(r["from"], r["rawPrice"], r["eventType"], r["priceState"])
-                    for r in drug["records"] if r["from"] > build_date]
-            if rows:
-                expected[code] = rows
-    actual = {}
-    for it in published["items"]:
-        actual.setdefault(it["code"], []).append(
-            (it["effectiveDate"], it["rawPrice"], it["eventType"], it["priceState"]))
-    assert expected, "history 無任何未生效列，對帳會空轉"
-    assert actual == expected
+
+def built_dir(tmp_path, rows, build_date=D):
+    from build_price_history import GuardConfig, run
+    run(rows_to_csv(rows), data_dir=tmp_path, build_date=build_date,
+        checked_at="2026-09-11T12:00:00+08:00", source_modified=None,
+        cfg=GuardConfig(min_rows=1, min_codes=1), fixtures_dir="__none__")
+    return tmp_path
+
+
+def edit_upcoming(data_dir, fn):
+    path = data_dir / "upcoming.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    fn(payload["items"])
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_u2_reconcile_passes_on_freshly_built_artifacts(tmp_path):
+    from scripts.verify_upcoming import reconcile
+    errors, warnings = reconcile(built_dir(tmp_path, MULTI + MULTI_OTHER))
+    assert (errors, warnings) == ([], [])
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda items: items.pop(1),                                     # 漏同代號第二筆
+    lambda items: items.append(dict(items[0])),                     # 多一筆
+    lambda items: items[0].update(rawPrice="99.00"),                # 內容不符
+    lambda items: items[-1].update(code="X000000100"),              # 歸錯代號
+], ids=["missing", "extra", "mutated", "wrong_code"])
+def test_u2_reconcile_rejects_mismatch(tmp_path, mutate):
+    from scripts.verify_upcoming import reconcile
+    data_dir = built_dir(tmp_path, MULTI + MULTI_OTHER)
+    edit_upcoming(data_dir, mutate)
+    errors, _ = reconcile(data_dir)
+    assert errors
+
+
+def test_u2_reconcile_zero_future_rows_is_warning_not_failure(tmp_path):
+    """未生效列自然歸零（健保公告空窗期）是合法狀態，不得擋發布。"""
+    from scripts.verify_upcoming import main, reconcile
+    data_dir = built_dir(tmp_path, MULTI, build_date=date(2028, 1, 1))   # 全部已生效
+    errors, warnings = reconcile(data_dir)
+    assert errors == [] and len(warnings) == 1 and "未生效" in warnings[0]
+    assert main([str(data_dir)]) == 0
+
+
+def test_u2_reconcile_cli_fails_on_mismatch(tmp_path):
+    from scripts.verify_upcoming import main
+    data_dir = built_dir(tmp_path, MULTI + MULTI_OTHER)
+    edit_upcoming(data_dir, lambda items: items.pop())
+    assert main([str(data_dir)]) == 1
+
+
+def test_unit_tests_do_not_read_published_data():
+    """pytest 在 build 前執行：任何測試讀 repo 的 data/ 都是在驗上一批產物（M4）。"""
+    offenders = [p.name for p in (ROOT / "tests").glob("test_*.py")
+                 if re.search(r"ROOT\s*/\s*[\"']data[\"']", p.read_text(encoding="utf-8"))]
+    assert offenders == []
+
+
+def test_workflow_verifies_upcoming_after_build_before_commit():
+    yml = (ROOT / ".github" / "workflows" / "build-data.yml").read_text(encoding="utf-8")
+    build = yml.index("run: uv run python build_price_history.py")
+    verify = yml.index("run: uv run python scripts/verify_upcoming.py data")
+    commit = yml.index("- name: Commit and push")
+    assert build < verify < commit
 
 
 # ── U3 描述欄位選列（§6.6，以 D 選列）───────────────────────────

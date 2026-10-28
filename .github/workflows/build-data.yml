@@ -56,6 +56,11 @@ jobs:
           ANOMALY_FLAG: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_anomaly && '--allow-anomaly' || '' }}
         run: uv run python build_price_history.py $ANOMALY_FLAG
 
+      # 對本次新產物做全量對帳（不符即停在 commit 前）。不可放進建置前的 pytest：
+      # 那裡只看得到上一批已發布資料
+      - name: Verify built artifacts
+        run: uv run python scripts/verify_upcoming.py data
+
       - name: Commit and push
         run: |
           git config user.name  "github-actions[bot]"
