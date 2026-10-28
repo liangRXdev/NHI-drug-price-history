@@ -156,6 +156,74 @@ def test_conflicting_prices_in_same_interval():
     assert stats["conflictingIntervals"] == 1
 
 
+YEAR = {y: (roc(date(y, 1, 1)), roc(date(y, 12, 31))) for y in range(2020, 2025)}
+
+
+def yearly(*spec):
+    """(年, 價格…)：同年多價＝同 (from, to) 衝突組；最後一段為開放迄日。"""
+    rows = []
+    for i, (year, *prices) in enumerate(spec):
+        frm, to = YEAR[year]
+        for p in prices:
+            rows.append(make_row(price=p, frm=frm, to="9991231" if i == len(spec) - 1 else to))
+    return rows
+
+
+def ev(recs):
+    return [(r["from"].year, r["rawPrice"], r["eventType"], r["previousPrice"],
+             r["absoluteChange"], r["percentChange"], r["crossesStop"]) for r in recs]
+
+
+@pytest.mark.parametrize("group", [("12.00", "9.00"), ("9.00", "12.00")])
+def test_record_after_conflict_group_is_unknown(group):
+    """M1：2020 10.00 → 2021 同區間 12.00／9.00 → 2022 11.00。
+
+    前筆屬衝突組時「前一筆價格」無唯一答案；依排序取組內最後一筆（字串序 "9.00" >
+    "12.00"）等於以排序結果作為價格優先權，違反 spec §6.3。本筆須為 unknown、不計調價。
+    """
+    recs = records_of(yearly((2020, "10.00"), (2021, *group), (2022, "11.00")))
+    assert [(y, raw, e) for y, raw, e, *_ in ev(recs)] == [
+        (2020, "10.00", "initial"), (2021, "12.00", "unknown"),
+        (2021, "9.00", "unknown"), (2022, "11.00", "unknown")]
+    last = recs[-1]
+    assert (last["previousPrice"], last["absoluteChange"], last["percentChange"]) == (None, None, None)
+    assert summary_at(recs, date(2022, 6, 1))["priceChangeCount"] == 0
+
+
+def test_stop_after_conflict_then_relist_does_not_pick_a_candidate():
+    """衝突組之後的「最後一個 priced 金額」同樣無唯一答案：跨停止期的 relisted 不得取候選價。"""
+    recs = records_of(yearly((2020, "10.00"), (2021, "12.00", "9.00"), (2022, "0.00"),
+                             (2023, "11.00")))
+    assert [(y, e, prev) for y, _, e, prev, *_ in ev(recs)] == [
+        (2020, "initial", None), (2021, "unknown", None), (2021, "unknown", None),
+        (2022, "unknown", None), (2023, "unknown", None)]
+    assert not any(r["crossesStop"] for r in recs)
+
+
+def test_stop_two_steps_after_conflict_does_not_pick_a_candidate():
+    """衝突 → 終止（unknown）→ 暫停：暫停前金額無唯一答案，不得給「暫停前 9.00 元」。"""
+    recs = records_of(yearly((2020, "10.00"), (2021, "12.00", "9.00"), (2022, "0.00"),
+                             (2023, "-")))
+    assert ev(recs)[-1][2:4] == ("unknown", None)
+
+
+def test_unambiguous_price_after_conflict_restores_normal_events():
+    """衝突組之後只要再出現單一有價列，後續事件即恢復正常判定。"""
+    recs = records_of(yearly((2020, "10.00"), (2021, "12.00", "9.00"), (2022, "11.00"),
+                             (2023, "11.00"), (2024, "0.00")))
+    assert [(y, e, prev) for y, _, e, prev, *_ in ev(recs)][3:] == [
+        (2022, "unknown", None), (2023, "unchanged", Decimal("11.00")),
+        (2024, "terminated", Decimal("11.00"))]
+
+
+def test_conflict_group_without_priced_candidate_keeps_last_price():
+    """衝突組內全為非有價（0 元／暫停）時，「最後一個 priced」仍是組前的金額，不受影響。"""
+    recs = records_of(yearly((2020, "10.00"), (2021, "0.00", "-"), (2022, "11.00"),
+                             (2023, "0.00")))
+    assert [(y, e, prev) for y, _, e, prev, *_ in ev(recs)][3:] == [
+        (2022, "unknown", None), (2023, "terminated", Decimal("11.00"))]
+
+
 # ── A5 gap／overlap（閉區間、累計最大迄日）──────────────────────
 def interval_rows(*spans, prices=None):
     return [make_row(frm=roc(a), to=roc(b) if b else "9991231",
