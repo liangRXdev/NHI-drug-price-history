@@ -105,12 +105,12 @@ build 為每週一次，`T` 可能已越過某些 `effectiveDate`。
       "price": null,
       "rawPrice": "0.00",
       "previousPrice": 245.0,          // 直接取 record.previousPrice（事件語意，可能為 null）
-      "pricedBefore": 245.0,           // 該列之前最後一個 priced 金額（狀態語意，獨立於事件）
+      "pricedBefore": 245.0,           // 該列之前最後一個 priced 金額（狀態語意，獨立於事件）；三態見 spec.md §5.1
       "previousState": "priced",       // 預告列之前一筆 record 的 priceState；無前筆為 null
       "absoluteChange": null,
       "percentChange": null,
       "crossesStop": false,
-      "everPriced": true,              // === (pricedBefore !== null)
+      "everPriced": true,              // === (pricedBefore !== null)；前價不唯一時為 true
       "flags": ["..."]                 // record flags ∪ 代號層 flags
     }
   ]
@@ -124,8 +124,9 @@ build 為每週一次，`T` 可能已越過某些 `effectiveDate`。
 | 描述欄位（品名／成分／規格／劑型／ATC／藥商） | §6.6 規則、以 `D` 選列 | **不得**以預告列本身回填（`BC26467100` 成分欄損毀前例） |
 | `eventType`／`previousPrice`／`absoluteChange`／`percentChange`／`crossesStop` | 直接取 record 既有欄位 | 不重算，避免與詳細頁雙重真相 |
 | `previousState` | 排序後前一筆 record 的 `priceState` | 無前筆（預告列即首列）→ `null` |
-| **`pricedBefore`** | 該列**之前**最後一個 `priced` 金額，無則 null | **狀態語意**，與事件無關。沿用 `engine.js:151` 既有的 `pricedBefore()` 邏輯 |
-| `everPriced` | `pricedBefore !== null` | 驅動 §5.3 首列 0 元例外。**定義為衍生值**，不獨立計算，避免與 `pricedBefore` 漂移 |
+| **`pricedBefore`** | 該列**之前**最後一個 `priced` 金額，無則 null；**前價不唯一**（衝突組之後）時省略此鍵並帶 `pricedBeforeAmbiguous: true`（三態定義見 `spec.md` §5.1） | **狀態語意**，與事件無關。與 `engine.js` 的 `priorPrices()` 同規則 |
+| `pricedBeforeAmbiguous` | 僅在前價不唯一時出現，值恆為 `true` | 其餘情形**不輸出**此鍵 |
+| `everPriced` | `pricedBefore !== null`（前價不唯一時為 `true`） | 驅動 §5.3 首列 0 元例外。**定義為衍生值**，不獨立計算，避免與 `pricedBefore` 漂移 |
 | `flags` | record flags 與代號層 flags 聯集，去重 | 用於畫面品質提示 |
 
 > **`pricedBefore` 為什麼非有不可**（v0.2 的缺漏，plan-verdict-r2 F1）：
@@ -232,7 +233,7 @@ build 為每週一次，`T` 可能已越過某些 `effectiveDate`。
 
 `everPriced` 一律指「**該列之前**是否存在 `priced` 紀錄」，只看排序在前的列，**不是整個代號的布林值**，也不受後續恢復支付影響。
 
-**由上而下取第一個符合的規則（互斥優先序）**，比照 `spec.md` §5.4 的寫法。X ＝ `pricedBefore`，Y ＝ 本列 `price`。
+**由上而下取第一個符合的規則（互斥優先序）**，比照 `spec.md` §5.4 的寫法。X ＝ `pricedBefore`，Y ＝ 本列 `price`。前價不唯一（`pricedBeforeAmbiguous`）時，序 5／6／8／9 的「終止前 X 元」「暫停前 X 元」改為「終止前支付價不唯一（來源紀錄衝突）」「暫停前支付價不唯一（來源紀錄衝突）」，不得取任一候選價（spec.md §5.1）。
 
 | 序 | 條件 | 標籤 | 副標 |
 |---|---|---|---|
@@ -406,8 +407,9 @@ v0.1 只寫「缺欄位」，會被實作成寬鬆解析（跳過壞列照樣渲
 | 列層必要欄位 | `code`(str)、`effectiveDate`(ISO date)、`priceState`(§5.3 五種之一)、`eventType`(§5.4 十種之一)、`rawPrice`(str)、`everPriced`(bool)、`flags`(array) |
 | **狀態與價格一致性** | `priceState = "priced"` ⟺ `price` 為正數；其餘四種狀態 `price` **必須**為 null |
 | **`everPriced` 一致性** | `everPriced === (pricedBefore !== null)` |
+| **前價不唯一** | `pricedBeforeAmbiguous` 若存在必須為 `true`，此時**不得**有 `pricedBefore` 鍵且 `everPriced = true`；不存在時 `pricedBefore` 鍵必須存在 |
 | 日期關係 | `effectiveDate > buildDate`（本檔定義即未生效列）；`endDate` 為 null 或 ≥ `effectiveDate` |
-| 合法 null | `endDate`、`price`、`previousPrice`、`pricedBefore`、`previousState`、`absoluteChange`、`percentChange` 可為 null |
+| 合法 null | `endDate`、`price`、`previousPrice`、`pricedBefore`、`previousState`、`absoluteChange`、`percentChange` 可為 null（`pricedBefore` 另有前價不唯一的省略鍵情形，見上） |
 | **合法缺值** | 描述欄位（品名／成分／規格／劑型／ATC／藥商）在「只有未來列」時為 **`null`**（不是空字串、不是省略鍵）；畫面顯示「—」 |
 
 **任一列不合法 → 整份視為損毀**，不渲染、不匯出。理由同 (b) 威脅模型：靜默跳過一列，使用者看到的是一份看起來完整但其實缺項的清單。

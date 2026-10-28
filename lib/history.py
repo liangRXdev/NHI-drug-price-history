@@ -35,6 +35,21 @@ INDEX_META_FIELDS = (
 )
 QUESTION_MARK_FIELDS = ("chName", "enName", "ingredient")
 
+class _Ambiguous:
+    """pricedBefore 三態之一：前價不唯一（衝突組之後，spec §5.1）。單例，以 `is` 比對。"""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self):
+        return "AMBIGUOUS"
+
+
+AMBIGUOUS = _Ambiguous()
+
 UNKNOWN_STATES = frozenset({"missing", "malformed"})
 CHANGE_EVENTS = frozenset({"increase", "decrease"})
 CENT = Decimal("0.01")
@@ -166,18 +181,48 @@ def _change(prev, new):
     return abs_change, pct
 
 
+def prior_prices(records):
+    """每筆 record 之前最後一個 priced 金額（spec §5.1 pricedBefore 三態）→ 與 records 對齊的清單。
+
+    值為 Decimal（唯一前價）、None（此前無有價紀錄）或 AMBIGUOUS（前價不唯一）：
+    - 衝突組（帶 conflicting_price_interval、同 from/to）的成員彼此不算「之前」：組內排序
+      只是 §6.2 的 deterministic 次鍵，因此組內每一列都取組前的狀態
+    - 組內有 priced 候選 → 組後為 AMBIGUOUS，直到再出現單一有價列；組內全為非 priced 則不影響
+    前端 engine.js priorPrices() 須實作相同規則（跨語言 golden）。
+    """
+    out = [None] * len(records)
+    last = None
+    i = 0
+    while i < len(records):
+        r = records[i]
+        if "conflicting_price_interval" not in r["flags"]:
+            out[i] = last
+            if r["priceState"] == "priced":
+                last = r["value"]
+            i += 1
+            continue
+        j = i
+        while (j < len(records) and "conflicting_price_interval" in records[j]["flags"]
+               and (records[j]["from"], records[j]["to"]) == (r["from"], r["to"])):
+            out[j] = last
+            j += 1
+        if any(x["priceState"] == "priced" for x in records[i:j]):
+            last = AMBIGUOUS
+        i = j
+    return out
+
+
 def derive_events(records):
     """就地寫入 eventType／previousPrice／absoluteChange／percentChange／crossesStop。
 
     衝突組（同 from/to 異價）沒有唯一價格，§6.3 禁止以排序結果作為價格優先權：
     - 前筆屬衝突組 → 本筆 unknown（「前一筆價格」只是組內排序最後的候選）
-    - 組內有 priced 候選 → 其後的「最後一個 priced 金額」同樣不唯一，直到再出現
-      單一有價列為止；期間需要該金額的事件（終止／暫停的 previousPrice、relisted）
-      一律 unknown，不取任一候選價
+    - 「最後一個 priced 金額」取 prior_prices()：前價不唯一時，需要它的事件（終止／暫停
+      的 previousPrice、relisted）一律 unknown，不取任一候選價
     """
-    last_priced = None
-    last_priced_ambiguous = False
+    priors = prior_prices(records)
     for i, r in enumerate(records):
+        last_priced = priors[i]
         prev = records[i - 1] if i else None
         r.update(eventType=None, previousPrice=None, absoluteChange=None,
                  percentChange=None, crossesStop=False)
@@ -193,7 +238,7 @@ def derive_events(records):
         elif (state in UNKNOWN_STATES or prev["priceState"] in UNKNOWN_STATES
               or conflicted or r.get("_overlapConflict")
               or "conflicting_price_interval" in prev["flags"]
-              or (needs_last_priced and last_priced_ambiguous)):
+              or (needs_last_priced and last_priced is AMBIGUOUS)):
             r["eventType"] = "unknown"                                      # 序 2
         elif state in ("terminated", "suspended"):
             if prev["priceState"] == state:
@@ -215,10 +260,6 @@ def derive_events(records):
             r["absoluteChange"], r["percentChange"] = _change(last_priced, r["value"])
         else:                                                               # 序 10
             r["eventType"] = "first_priced"
-
-        if state == "priced":
-            last_priced = r["value"]
-            last_priced_ambiguous = conflicted
 
 
 # ── window 與描述欄位 ───────────────────────────────────────────
@@ -363,23 +404,32 @@ def record_json(r, extra_flags=()):
 
 
 def priced_before(records, target):
-    """target 之前（排序在前）最後一個 priced 金額；只看過去列，不受未來恢復支付影響。
+    """target 之前（排序在前）最後一個 priced 金額；三態同 prior_prices()。
 
     搜尋卡只有 window，無法回看完整歷史：「終止→終止續期」（unchanged）的
     previousPrice 依 §5.4 為 null，需此值才能顯示「終止前 X 元」，並判斷是否套用
     「此前無有價紀錄」標籤（spec §5.3）。
     """
-    last = None
-    for r in records:
+    for r, prior in zip(records, prior_prices(records)):
         if r is target:
-            return last
-        if r["priceState"] == "priced":
-            last = r["value"]
+            return prior
     raise ValueError("target 不在 records 中")
 
 
+def priced_before_json(prior):
+    """pricedBefore 三態的線上編碼（spec §5.1）：不唯一時省略 pricedBefore 鍵、帶旗標。
+
+    不用 null＋旗標：舊版前端遇 null 會套用 §5.3 首列 0 元例外；省略鍵則走既有的
+    保守路徑（搜尋卡要求開詳細頁、預告清單整份判損毀）。旗標只在不唯一時輸出，
+    既有資料重建不產生 diff。
+    """
+    if prior is AMBIGUOUS:
+        return {"pricedBeforeAmbiguous": True}
+    return {"pricedBefore": _num(prior)}
+
+
 def window_json(records, r, extra_flags):
-    return {**record_json(r, extra_flags), "pricedBefore": _num(priced_before(records, r))}
+    return {**record_json(r, extra_flags), **priced_before_json(priced_before(records, r))}
 
 
 def invalid_json(r):
@@ -431,7 +481,8 @@ UPCOMING_GENERATOR_VERSION = "upcoming/1"
 PRICE_STATES = frozenset({"priced", "terminated", "suspended", "missing", "malformed"})
 EVENT_TYPES = frozenset({"initial", "unknown", "unchanged", "terminated", "suspended",
                          "increase", "decrease", "relisted", "first_priced"})
-UPCOMING_NULLABLE = ("endDate", "price", "previousPrice", "pricedBefore",
+# pricedBefore 不在此列：前價不唯一時合法省略（另以 _priced_before_errors 驗）
+UPCOMING_NULLABLE = ("endDate", "price", "previousPrice",
                      "previousState", "absoluteChange", "percentChange")
 UPCOMING_ROW_FIELDS = (("code", str), ("effectiveDate", str), ("priceState", str),
                        ("eventType", str), ("rawPrice", str), ("everPriced", bool),
@@ -450,11 +501,12 @@ def build_upcoming(code, entry, build_date, code_flags):
     """
     records = entry["records"]
     meta_row = select_meta_row(records, build_date)
+    priors = prior_prices(records)
     items = []
     for i, r in enumerate(records):
         if r["from"] <= build_date:
             continue
-        before = priced_before(records, r)     # 狀態語意，與 previousPrice（事件語意）並存
+        before = priors[i]     # 狀態語意，與 previousPrice（事件語意）並存；三態見 §5.1
         items.append({
             "code": code,
             **{k: (meta_row[k] if meta_row else None) for k in INDEX_META_FIELDS},
@@ -465,7 +517,7 @@ def build_upcoming(code, entry, build_date, code_flags):
             "price": _num(r["value"]),
             "rawPrice": r["rawPrice"],
             "previousPrice": _num(r["previousPrice"]),
-            "pricedBefore": _num(before),
+            **priced_before_json(before),
             "previousState": records[i - 1]["priceState"] if i else None,
             "absoluteChange": _num(r["absoluteChange"]),
             "percentChange": _num(r["percentChange"]),
@@ -543,6 +595,23 @@ def validate_upcoming(payload, *, generator_version=UPCOMING_GENERATOR_VERSION):
     return errors
 
 
+def _priced_before_errors(item):
+    """pricedBefore 三態（spec-upcoming §5.5.1）：數值／null，或省略鍵＋pricedBeforeAmbiguous: true。"""
+    if "pricedBeforeAmbiguous" in item:
+        if item["pricedBeforeAmbiguous"] is not True:
+            return [f"pricedBeforeAmbiguous 只能為 true：{item['pricedBeforeAmbiguous']!r}"]
+        if "pricedBefore" in item:
+            return [f"pricedBeforeAmbiguous 時不得有 pricedBefore：{item['pricedBefore']!r}"]
+        if item["everPriced"] is not True:
+            return ["pricedBeforeAmbiguous 時 everPriced 必須為 true（不唯一 ≠ 此前無有價紀錄）"]
+        return []
+    if "pricedBefore" not in item:
+        return ["缺少 pricedBefore（且無 pricedBeforeAmbiguous）"]
+    if item["everPriced"] != (item["pricedBefore"] is not None):
+        return [f"everPriced {item['everPriced']} 與 pricedBefore {item['pricedBefore']!r} 不一致"]
+    return []
+
+
 def _upcoming_row_errors(item, build_date):
     if not isinstance(item, dict):
         return [f"不是物件：{type(item).__name__}"]
@@ -582,10 +651,10 @@ def _upcoming_row_errors(item, build_date):
     elif price is not None:
         errors.append(f"priceState={item['priceState']} 但 price 非 null：{price!r}")
 
-    if item["everPriced"] != (item["pricedBefore"] is not None):
-        errors.append(f"everPriced {item['everPriced']} 與 pricedBefore "
-                      f"{item['pricedBefore']!r} 不一致")
+    errors.extend(_priced_before_errors(item))
     for key in ("previousPrice", "pricedBefore", "absoluteChange", "percentChange"):
+        if key not in item:
+            continue
         value = item[key]
         if value is not None and (not isinstance(value, (int, float))
                                   or isinstance(value, bool)):
