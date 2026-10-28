@@ -750,3 +750,34 @@ def test_blank_rate_guard_is_not_overridable():
 def test_whole_column_blank_warns_even_without_baseline():
     _, warnings, _ = errors_for(blank_stats(200_000, enName=200_000))
     assert any("enName" in w or "藥品英文名稱" in w for w in warnings)
+
+
+# ── Low：drug_index.json 體積 guard（首頁必載，2026-10 實測 gzip 3.29 MB）──
+def test_index_gzip_size_guard_boundary():
+    data = json.dumps({"drugs": [{"code": f"A{i:09d}", "n": i} for i in range(20_000)]}).encode()
+    size = gzip_size(data)
+
+    def result(**kw):
+        errors, warnings, _ = check_guards(stats(), None, set(), set(), {}, replace(GuardConfig(), **kw),
+                                           False, index_bytes=data)
+        return any("drug_index.json" in e for e in errors), any("drug_index.json" in w for w in warnings)
+
+    assert result(index_fail_gzip_bytes=size, index_warn_gzip_bytes=size) == (False, False)
+    assert result(index_fail_gzip_bytes=size - 1)[0] is True
+    assert result(index_warn_gzip_bytes=size - 1) == (False, True)
+    assert len(data) > 5 * size                                           # 比的是 gzip 而非 raw
+
+
+def test_index_size_guard_defaults():
+    cfg = GuardConfig()
+    assert (cfg.index_warn_gzip_bytes, cfg.index_fail_gzip_bytes) == (4_000_000, 5_000_000)
+
+
+def test_oversized_index_fails_build_and_writes_nothing(tmp_path):
+    build(tmp_path)
+    before = tree_hash(tmp_path)
+    with pytest.raises(BuildError) as e:
+        build(tmp_path, cfg=GuardConfig(min_rows=1, min_codes=1, index_fail_gzip_bytes=100),
+              checked_at="2026-09-18T02:00:00+08:00")
+    assert any("drug_index.json" in m for m in e.value.args[0])
+    assert tree_hash(tmp_path) == before

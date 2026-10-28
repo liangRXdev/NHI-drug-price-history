@@ -53,6 +53,10 @@ class GuardConfig:
     max_disappeared_pct: int = 1      # 語意 guard，可人工放行
     shard_warn_gzip_bytes: int = 2_000_000
     shard_fail_gzip_bytes: int = 5_000_000
+    # 首頁必載的搜尋 index：2026-10 實測 gzip 3.29 MB／raw 30.3 MB，比照 shard 的 5 MB 上限，
+    # warning 門檻放在現值之上，避免每次建置都告警
+    index_warn_gzip_bytes: int = 4_000_000
+    index_fail_gzip_bytes: int = 5_000_000
     # 預告清單：兩條皆為 WARNING。列數 0 可能為真（健保公告有空窗期），
     # 佔比過高與體積暴增則多半是來源結構異常（spec-upcoming §3.4、§3.5）
     upcoming_code_pct_warn: int = 5
@@ -165,7 +169,7 @@ def upcoming_payload(upcoming_items, version, build_date):
 
 
 def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
-                 upcoming_errors=(), upcoming_bytes=b""):
+                 upcoming_errors=(), upcoming_bytes=b"", index_bytes=b""):
     """→ (errors, warnings, anomalies_overridden)。errors 非空即不得發布。"""
     errors, warnings, overridden = [], [], []
     rows = stats["sourceRowCount"]
@@ -209,6 +213,13 @@ def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allo
             errors.append(f"{path} gzip {size:,} bytes > {cfg.shard_fail_gzip_bytes:,}")
         elif size > cfg.shard_warn_gzip_bytes:
             warnings.append(f"{path} gzip {size:,} bytes > {cfg.shard_warn_gzip_bytes:,}")
+
+    if index_bytes:
+        size = gzip_size(index_bytes)
+        if size > cfg.index_fail_gzip_bytes:
+            errors.append(f"drug_index.json gzip {size:,} bytes > {cfg.index_fail_gzip_bytes:,}")
+        elif size > cfg.index_warn_gzip_bytes:
+            warnings.append(f"drug_index.json gzip {size:,} bytes > {cfg.index_warn_gzip_bytes:,}")
 
     # 預告清單：驗證失敗一律 error（全有全無，整批不發布）；統計異常只 WARNING
     errors.extend(f"upcoming.json 驗證失敗：{m}" for m in upcoming_errors)
@@ -369,7 +380,8 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
 
     errors, warnings, overridden = check_guards(
         stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
-        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes)
+        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes,
+        index_bytes=files["drug_index.json"])
     warnings += golden_rewrites(shards, fixtures_dir)
     if errors:
         raise BuildError(errors, warnings)
