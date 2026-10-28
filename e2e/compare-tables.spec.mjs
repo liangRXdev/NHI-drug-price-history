@@ -1,7 +1,7 @@
 // 摘要對照表、合併事件時間表與 CSV（spec-compare.md §5）：M1、M14、M15。
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
-import { mockSite } from './mock.mjs';
+import { buildData, mockSite } from './mock.mjs';
 
 const FOUR = 'A035680329,AC48867100,B009254100,A020296321';
 const summary = (page) => page.locator('.cmp-summary');
@@ -135,6 +135,30 @@ test('M15 表格篩選後，CSV 隨之改變且仍逐列對應', async ({ page }
   const data = parseCSV((await csvText(page)).slice(1)).slice(2);
   expect(data.length).toBe(after);
   expect(data.some((r) => r[2] === 'B009254100')).toBe(false);
+});
+
+// M5：畫面事件表的狀態欄標註必須與 CSV 備註同源（重疊、同期間有不同支付價原本只出現在 CSV）
+test('M5 事件表的重疊／衝突標註與 CSV 備註逐列一致', async ({ page }) => {
+  const data = buildData();
+  const recs = data.shards.A035.drugs.A035680329.records;
+  recs[1].flags = [...recs[1].flags, 'overlap'];
+  recs[2].flags = [...recs[2].flags, 'conflicting_price_interval'];
+  recs[3].flags = [...recs[3].flags, 'gap_before', 'overlap'];
+  await open(page, FOUR, { data });
+
+  const shown = await eventRows(page).evaluateAll(
+    (trs) => trs.map((tr) => [tr.dataset.row, tr.children[7].textContent.trim()]));
+  const csv = parseCSV((await csvText(page)).slice(1)).slice(2);
+  expect(csv.length).toBe(shown.length);
+  shown.forEach(([id, cell], i) => {
+    const [, , , , , , , , status, note] = csv[i];
+    if (id.includes('-x')) return;                        // 日期異常列另有自己的文案
+    expect(cell, id).toBe(note ? `${status}（${note}）` : status);
+  });
+  const byId = Object.fromEntries(shown);
+  expect(byId['A035680329-r1']).toContain('重疊');
+  expect(byId['A035680329-r2']).toContain('同期間有不同支付價');
+  expect(byId['A035680329-r3']).toMatch(/前有空窗.*重疊/);
 });
 
 test('§5.2 invalidRecords 置於全表末尾，不得硬排成有效日期', async ({ page }) => {

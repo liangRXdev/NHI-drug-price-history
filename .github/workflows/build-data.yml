@@ -7,11 +7,16 @@ on:
         description: '人工放行語意異常 guard（價格異常列或代號消失 > 1%）。僅在確認為健保署合法變更時勾選'
         type: boolean
         default: false
+  # 官方月更，週檢查可及早發現端點／schema 故障。排程一律落在台灣白天：2026-10-11／18／25
+  # 原排程（UTC 18:00，GitHub 延遲後實際在台灣 04–05 點）皆因端點 RemoteDisconnected 失敗，
+  # 同期白天手動 dispatch 全數成功。避開整點（GitHub 排程最壅塞、延遲最久的時段）。
+  # 備援排程：主排程失敗時隔日再檢查一次；主排程成功時只會多一筆「資料無變動」的 status commit
   schedule:
-    - cron: '0 18 * * 0'       # 每週日 UTC 18:00 = 台灣週一 02:00；官方月更，週檢查可及早發現端點／schema 故障
+    - cron: '17 1 * * 1'       # 主：UTC 週一 01:17 = 台灣週一 09:17
+    - cron: '17 2 * * 2'       # 備援：UTC 週二 02:17 = 台灣週二 10:17
 
-permissions:
-  contents: write
+# 權限逐 job 授予：build 只需 contents:write；開 issue 的權限只給 report-failure
+permissions: {}
 
 # 排程與手動觸發重疊時排隊依序執行、不取消：避免較舊的建置結果晚完成而覆蓋較新者
 concurrency:
@@ -21,7 +26,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 下載重試預算：6 次 × 單次逾時 180s ＋ 退避 750s ≈ 31 分鐘，另留安裝與建置時間
+    timeout-minutes: 45
+    permissions:
+      contents: write
 
     steps:
       # Actions 一律 pin commit SHA：本 job 具 contents:write，可直接改寫供臨床查詢的
@@ -48,6 +56,11 @@ jobs:
           ANOMALY_FLAG: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_anomaly && '--allow-anomaly' || '' }}
         run: uv run python build_price_history.py $ANOMALY_FLAG
 
+      # 對本次新產物做全量對帳（不符即停在 commit 前）。不可放進建置前的 pytest：
+      # 那裡只看得到上一批已發布資料
+      - name: Verify built artifacts
+        run: uv run python scripts/verify_upcoming.py data
+
       - name: Commit and push
         run: |
           git config user.name  "github-actions[bot]"
@@ -70,3 +83,26 @@ jobs:
           git commit -m "$msg"
           # 被拒（non-fast-forward）即讓 workflow 失敗；禁止強制推送
           git push
+
+  # 連續失敗 ≥ 2 次自動開 issue（已有 open issue 則留言更新），之後成功即自動關閉。
+  # 單次失敗仍只靠 GitHub 內建失敗通知信：端點偶發斷線隔日備援排程多半會自行恢復
+  report-failure:
+    needs: build
+    if: always() && needs.build.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: scripts
+
+      - name: Open, update or close failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/build_failure_issue.py --result "${{ needs.build.result }}"

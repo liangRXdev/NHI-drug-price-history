@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 
-import { searchCard, selectMeta, summaryAt, pricedBefore, currentLabel, latestEventLabel } from '../engine.js';
+import { searchCard, selectMeta, summaryAt, pricedBefore, currentLabel, latestEventLabel, dayState } from '../engine.js';
 
 const FIX = new URL('../tests/fixtures/', import.meta.url);
 const front = JSON.parse(readFileSync(new URL('golden_frontend_2026-09-11.json', FIX), 'utf8'));
@@ -130,3 +130,36 @@ test('C1 AB47689100 預告調價：前一天為現價＋預告，當天起為新
     assert.equal(summaryAt(recs, T).current.rawPrice, '7.90', T);
   }
 });
+
+// ── M2 同價重疊不是衝突（spec §5.4、§5.5）：與 Python 同一份人工凍結預期值 ──
+const samePrice = JSON.parse(readFileSync(new URL('golden_same_price_overlap.json', FIX), 'utf8'));
+const samePriceFront = JSON.parse(readFileSync(new URL('golden_frontend_same_price_overlap.json', FIX), 'utf8'));
+
+for (const [code, want] of Object.entries(samePrice.codes)) {
+  const recs = samePriceFront.shards[code].records;
+
+  for (const [ref, s] of Object.entries(want.summaries)) {
+    test(`M2 ${code} 參考日 ${ref} 摘要與 golden 一致`, () => {
+      const got = summaryAt(recs, ref);
+      assert.deepEqual(
+        [got.status, got.current && { from: got.current.from, rawPrice: got.current.rawPrice }, got.currentCandidates.length],
+        [s.status, s.current, s.candidates],
+      );
+    });
+  }
+
+  for (const [day, kind] of Object.entries(want.dayState)) {
+    test(`M2 ${code} ${day} dayState 與 golden 一致`, () => {
+      assert.equal(dayState(recs, day).kind, kind);
+    });
+  }
+
+  for (const [indexDate, byT] of Object.entries(want.searchCard)) {
+    for (const [T, card] of Object.entries(byT)) {
+      test(`M2 ${code} index ${indexDate}／T ${T} 搜尋卡與 golden 一致`, () => {
+        const got = searchCard(samePriceFront.index[indexDate][code], T);
+        assert.deepEqual({ kind: got.kind, text: got.text }, card);
+      });
+    }
+  }
+}

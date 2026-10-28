@@ -10,6 +10,7 @@
   uv run python scripts/export_golden_frontend.py
 """
 
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -22,6 +23,10 @@ from lib.golden import SNAPSHOT_DATE, SNAPSHOT_FILE  # noqa: E402
 from lib.nhi import parse_csv  # noqa: E402
 
 OUT = ROOT / "tests" / "fixtures" / f"golden_frontend_{SNAPSHOT_DATE}.json"
+# M2 跨語言合成案例：來源列與人工凍結預期值在 golden_same_price_overlap.json，
+# 這裡只把來源列建成前端格式（shard＋各 index 日的 index entry）
+SYNTH_IN = ROOT / "tests" / "fixtures" / "golden_same_price_overlap.json"
+SYNTH_OUT = ROOT / "tests" / "fixtures" / "golden_frontend_same_price_overlap.json"
 
 
 def render():
@@ -37,9 +42,28 @@ def render():
     })
 
 
+def synth_rows():
+    from tests.helpers import make_row   # noqa: PLC0415（測試 helper，只在合成案例使用）
+    spec = json.loads(SYNTH_IN.read_text(encoding="utf-8"))
+    rows = [make_row(code=code, price=r["price"], frm=r["from"], to=r["to"])
+            for code, case in spec["codes"].items() for r in case["rows"]]
+    return spec, rows
+
+
+def render_synthetic():
+    spec, rows = synth_rows()
+    shards, index = {}, {}
+    for d in spec["indexDates"]:
+        s, drugs, _, _ = build_outputs(rows, date.fromisoformat(d))
+        shards = {code: entry for shard in s.values() for code, entry in shard.items()}
+        index[d] = {x["code"]: x for x in drugs}
+    return dumps({"shards": shards, "index": index})
+
+
 def main():
     OUT.write_bytes(render())
-    print(f"✓ → {OUT.relative_to(ROOT)}")
+    SYNTH_OUT.write_bytes(render_synthetic())
+    print(f"✓ → {OUT.relative_to(ROOT)}、{SYNTH_OUT.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

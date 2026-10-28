@@ -1,5 +1,6 @@
 """B1–B8 建置與 CI 安全（plan.md §5）。"""
 
+import http.client
 import json
 import re
 import subprocess
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import requests
+import urllib3
 
 import build_price_history as bph
 from build_price_history import BuildError, GuardConfig, check_guards, gzip_size, run
@@ -52,11 +54,18 @@ def fake_get(*outcomes):
     return get, calls
 
 
+# 分鐘級退避（30s 起、上限 5min）：2026-10 三次排程皆在台灣凌晨 RemoteDisconnected，
+# 舊的 5、10 秒退避 15 秒內就耗盡重試，撐不過端點的維護窗
+BACKOFF = [30, 60, 120, 240, 300]
+
+
 @pytest.mark.parametrize("outcome,expected_calls,expected_sleeps", [
-    (FakeResp(500), 3, [5, 10]),
-    (FakeResp(429), 3, [5, 10]),
-    (requests.Timeout("timeout"), 3, [5, 10]),
-    (requests.exceptions.SSLError("bad cert"), 3, [5, 10]),
+    (FakeResp(500), 6, BACKOFF),
+    (FakeResp(429), 6, BACKOFF),
+    (requests.Timeout("timeout"), 6, BACKOFF),
+    (requests.exceptions.SSLError("bad cert"), 6, BACKOFF),
+    (requests.ConnectionError(http.client.RemoteDisconnected("Remote end closed connection")),
+     6, BACKOFF),
     (FakeResp(404), 1, []),                                  # 4xx（非 429）不重試
 ])
 def test_download_failures_raise_after_policy(outcome, expected_calls, expected_sleeps):
@@ -71,6 +80,46 @@ def test_download_failures_raise_after_policy(outcome, expected_calls, expected_
 def test_download_recovers_on_retry():
     get, _ = fake_get(FakeResp(503), FakeResp(200, b"ok"))
     assert nhi.download("https://x.invalid", "t", get=get, sleep=lambda s: None) == b"ok"
+
+
+class BrokenBody(FakeResp):
+    """回應已開始、讀 body 時連線中斷：例外可能未經 requests 包裝就冒出來。"""
+    def __init__(self, exc):
+        super().__init__(200)
+        self.exc = exc
+
+    def iter_content(self, chunk_size):
+        raise self.exc
+        yield b""
+
+
+RAW_CONNECTION_ERRORS = [
+    http.client.RemoteDisconnected("Remote end closed connection without response"),
+    http.client.IncompleteRead(b"partial"),
+    ConnectionResetError(104, "Connection reset by peer"),
+    urllib3.exceptions.ProtocolError("Connection aborted."),
+]
+
+
+@pytest.mark.parametrize("exc", RAW_CONNECTION_ERRORS, ids=lambda e: type(e).__name__)
+@pytest.mark.parametrize("where", ["get", "body"])
+def test_download_retries_raw_connection_errors(exc, where):
+    """未包裝的連線例外也要重試，且最後轉成 SourceError（不可變成無訊息的 crash）。"""
+    get, calls = fake_get(exc if where == "get" else BrokenBody(exc))
+    sleeps = []
+    with pytest.raises(nhi.SourceError):
+        nhi.download("https://x.invalid", "t", get=get, sleep=sleeps.append)
+    assert len(calls) == 6 and sleeps == BACKOFF
+
+
+@pytest.mark.parametrize("exc", RAW_CONNECTION_ERRORS, ids=lambda e: type(e).__name__)
+def test_download_recovers_after_raw_connection_error(exc):
+    get, _ = fake_get(BrokenBody(exc), FakeResp(200, b"ok"))
+    assert nhi.download("https://x.invalid", "t", get=get, sleep=lambda s: None) == b"ok"
+
+
+def test_retry_backoff_is_capped():
+    assert [nhi.retry_wait(n) for n in range(1, 9)] == [30, 60, 120, 240, 300, 300, 300, 300]
 
 
 BAD_BODIES = {
@@ -647,3 +696,88 @@ def test_upcoming_guards_warn_but_never_fail():
 def test_upcoming_validation_errors_are_build_errors():
     errors, _, _ = errors_for(stats(), upcoming_errors=["items[0] code 為空字串"])
     assert any("upcoming.json 驗證失敗" in e for e in errors)
+
+
+# ── M3 非必要描述欄位消失不可靜默 ───────────────────────────────
+NAME_HEADERS = {"chName": "藥品中文名稱", "enName": "藥品英文名稱", "ingredient": "成分"}
+
+
+@pytest.mark.parametrize("key", list(NAME_HEADERS))
+def test_missing_descriptive_column_warns(tmp_path, key, capsys):
+    """來源改版拿掉品名／成分欄：不 fail（非必要欄位），但必須 WARNING 且進 build 警告清單。"""
+    header = [h for h in HEADER if h != NAME_HEADERS[key]]
+    raw = rows_to_csv([make_row(code=f"A{i:09d}") for i in range(3)], header=header)
+    result = build(tmp_path, raw=raw)
+    err = capsys.readouterr().err
+    assert "WARNING" in err and NAME_HEADERS[key] in err
+    assert any(NAME_HEADERS[key] in w for w in result["warnings"])
+
+
+def test_meta_records_blank_rows_of_name_fields(tmp_path):
+    rows = [make_row(code="A000000100"), make_row(code="A000000200", chName="", ingredient="")]
+    build(tmp_path, raw=rows_to_csv(rows))
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert meta["blankFieldRows"] == {"chName": 1, "enName": 0, "ingredient": 1}
+
+
+def blank_stats(rows, **blank):
+    return {**stats(rows=rows), "blankFieldRows": {"chName": 0, "enName": 0, "ingredient": 0, **blank}}
+
+
+@pytest.mark.parametrize("new,prev,fails", [
+    (blank_stats(200_000, chName=10_020), blank_stats(200_000), True),          # +5.01 pt
+    (blank_stats(200_000, chName=10_000), blank_stats(200_000), False),         # +5.00 pt：邊界通過
+    (blank_stats(200_000, ingredient=30_000), blank_stats(200_000, ingredient=20_000), False),  # +5.00
+    (blank_stats(200_000, ingredient=30_002), blank_stats(200_000, ingredient=20_000), True),
+    (blank_stats(100_000, enName=5_001), blank_stats(200_000), True),           # 分母不同：比例比較
+    (blank_stats(200_000), blank_stats(200_000, chName=50_000), False),         # 改善不擋
+    (blank_stats(200_000, chName=200_000), stats(rows=200_000), False),         # 前版無基準：只警告
+])
+def test_blank_rate_jump_guard(new, prev, fails):
+    errors, warnings, _ = errors_for(new, prev_meta=prev)
+    assert bool(errors) == fails, errors
+    if fails:
+        assert any("空白率" in e for e in errors)
+
+
+def test_blank_rate_guard_is_not_overridable():
+    """spec §14：只有兩條語意 guard 可人工放行；本條不在其列。"""
+    errors, _, _ = errors_for(blank_stats(200_000, chName=20_000), prev_meta=blank_stats(200_000),
+                              allow=True)
+    assert any("空白率" in e for e in errors)
+
+
+def test_whole_column_blank_warns_even_without_baseline():
+    _, warnings, _ = errors_for(blank_stats(200_000, enName=200_000))
+    assert any("enName" in w or "藥品英文名稱" in w for w in warnings)
+
+
+# ── Low：drug_index.json 體積 guard（首頁必載，2026-10 實測 gzip 3.29 MB）──
+def test_index_gzip_size_guard_boundary():
+    data = json.dumps({"drugs": [{"code": f"A{i:09d}", "n": i} for i in range(20_000)]}).encode()
+    size = gzip_size(data)
+
+    def result(**kw):
+        errors, warnings, _ = check_guards(stats(), None, set(), set(), {}, replace(GuardConfig(), **kw),
+                                           False, index_bytes=data)
+        return any("drug_index.json" in e for e in errors), any("drug_index.json" in w for w in warnings)
+
+    assert result(index_fail_gzip_bytes=size, index_warn_gzip_bytes=size) == (False, False)
+    assert result(index_fail_gzip_bytes=size - 1)[0] is True
+    assert result(index_warn_gzip_bytes=size - 1) == (False, True)
+    assert len(data) > 5 * size                                           # 比的是 gzip 而非 raw
+
+
+def test_index_size_guard_defaults():
+    cfg = GuardConfig()
+    assert (cfg.index_warn_gzip_bytes, cfg.index_fail_gzip_bytes) == (4_000_000, 5_000_000)
+
+
+def test_oversized_index_fails_build_and_writes_nothing(tmp_path):
+    build(tmp_path)
+    before = tree_hash(tmp_path)
+    with pytest.raises(BuildError) as e:
+        build(tmp_path, cfg=GuardConfig(min_rows=1, min_codes=1, index_fail_gzip_bytes=100),
+              checked_at="2026-09-18T02:00:00+08:00")
+    assert any("drug_index.json" in m for m in e.value.args[0])
+    assert tree_hash(tmp_path) == before

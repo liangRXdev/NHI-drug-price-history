@@ -82,8 +82,11 @@ test('M8 巢狀區間：序 2／3／4 依有效區間聯集，不依最後一列
   assert.equal(dayState(recs, '2022-06-01').kind, 'priced');
   assert.equal(dayState(recs, '2025-01-01').kind, 'uncovered');
   assert.equal(dayState(recs, '2019-12-31').kind, 'before');
-  // 兩列同時有效的日期 → 序 1 衝突
-  assert.equal(dayState(recs, '2021-06-01').rule, 1);
+  // 兩列同時有效但同價 → 不是衝突（spec.md §5.4「同價的 overlap 不視為衝突」，M2）
+  assert.equal(dayState(recs, '2021-06-01').rule, 10);
+  // 異價重疊 → 序 1 衝突
+  const diff = [rec('2020-01-01', '2024-12-31', '10.00'), rec('2021-01-01', '2021-12-31', '12.00')];
+  assert.equal(dayState(diff, '2021-06-01').rule, 1);
 });
 
 test('M8 衝突 flag 只作用於該筆涵蓋的日期，不擴張', () => {

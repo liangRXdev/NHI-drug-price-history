@@ -53,10 +53,21 @@ class GuardConfig:
     max_disappeared_pct: int = 1      # 語意 guard，可人工放行
     shard_warn_gzip_bytes: int = 2_000_000
     shard_fail_gzip_bytes: int = 5_000_000
+    # 首頁必載的搜尋 index：2026-10 實測 gzip 3.29 MB／raw 30.3 MB，比照 shard 的 5 MB 上限，
+    # warning 門檻放在現值之上，避免每次建置都告警
+    index_warn_gzip_bytes: int = 4_000_000
+    index_fail_gzip_bytes: int = 5_000_000
     # 預告清單：兩條皆為 WARNING。列數 0 可能為真（健保公告有空窗期），
     # 佔比過高與體積暴增則多半是來源結構異常（spec-upcoming §3.4、§3.5）
     upcoming_code_pct_warn: int = 5
     upcoming_raw_warn_bytes: int = 500_000
+    # 品名／成分空白率比前版暴增即 fail：欄名改版時模糊比對可能找不到欄位或抓錯欄，
+    # 非必要欄位不會 raise，只會讓搜尋整批失效。不提供人工放行（spec §14 只放行兩條語意 guard）
+    max_blank_rate_increase_pct: int = 5
+
+
+# 空白率 guard 的對象：搜尋與 §6.7 問號統計所依賴的描述欄位
+BLANK_GUARDED_FIELDS = history.QUESTION_MARK_FIELDS
 
 
 class BuildError(Exception):
@@ -95,6 +106,7 @@ def build_outputs(rows, build_date):
     except Exception as e:
         raise BuildError([f"upcoming.json 產生失敗：{e!r}"], []) from e
 
+    stats["blankFieldRows"] = {k: sum(1 for r in rows if not r[k]) for k in BLANK_GUARDED_FIELDS}
     records = [r for e in by_code.values() for r in e["records"]]
     stats["uniqueDrugCodeCount"] = len(by_code)
     stats["recordCount"] = len(records)
@@ -157,7 +169,7 @@ def upcoming_payload(upcoming_items, version, build_date):
 
 
 def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
-                 upcoming_errors=(), upcoming_bytes=b""):
+                 upcoming_errors=(), upcoming_bytes=b"", index_bytes=b""):
     """→ (errors, warnings, anomalies_overridden)。errors 非空即不得發布。"""
     errors, warnings, overridden = [], [], []
     rows = stats["sourceRowCount"]
@@ -191,12 +203,23 @@ def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allo
     else:
         errors.extend(semantic)
 
+    errors_blank, warnings_blank = blank_rate_checks(stats, prev_meta, cfg)
+    errors.extend(errors_blank)
+    warnings.extend(warnings_blank)
+
     for path, data in shard_files.items():
         size = gzip_size(data)
         if size > cfg.shard_fail_gzip_bytes:
             errors.append(f"{path} gzip {size:,} bytes > {cfg.shard_fail_gzip_bytes:,}")
         elif size > cfg.shard_warn_gzip_bytes:
             warnings.append(f"{path} gzip {size:,} bytes > {cfg.shard_warn_gzip_bytes:,}")
+
+    if index_bytes:
+        size = gzip_size(index_bytes)
+        if size > cfg.index_fail_gzip_bytes:
+            errors.append(f"drug_index.json gzip {size:,} bytes > {cfg.index_fail_gzip_bytes:,}")
+        elif size > cfg.index_warn_gzip_bytes:
+            warnings.append(f"drug_index.json gzip {size:,} bytes > {cfg.index_warn_gzip_bytes:,}")
 
     # 預告清單：驗證失敗一律 error（全有全無，整批不發布）；統計異常只 WARNING
     errors.extend(f"upcoming.json 驗證失敗：{m}" for m in upcoming_errors)
@@ -215,6 +238,32 @@ def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allo
     if stats.get("openEndedRowAnomalies"):
         warnings.append(f"{stats['openEndedRowAnomalies']} 個代號的開放迄日列數不為 1（§6.8）")
     return errors, warnings, overridden
+
+
+def blank_rate_checks(stats, prev_meta, cfg):
+    """描述欄位空白率：整欄空白 → WARNING；比前版已發布 meta 暴增 > N 個百分點 → error。
+
+    以整數交叉相乘比較比例（new/rows − prev/prev_rows > N%），邊界值通過。
+    前版 meta 沒有 blankFieldRows（首次啟用）時無基準，只做整欄空白檢查。
+    """
+    errors, warnings = [], []
+    rows = stats["sourceRowCount"]
+    blank = stats.get("blankFieldRows") or {}
+    prev = (prev_meta or {}).get("blankFieldRows") or {}
+    prev_rows = (prev_meta or {}).get("sourceRowCount") or 0
+    for key in BLANK_GUARDED_FIELDS:
+        if key not in blank or rows <= 0:
+            continue
+        src = nhi.FIELDS[key][0][0]
+        if blank[key] == rows:
+            warnings.append(f"{src}（{key}）空白率 100%：來源欄位缺漏或整欄空白")
+        if key in prev and prev_rows > 0:
+            lhs = (blank[key] * prev_rows - prev[key] * rows) * 100
+            if lhs > cfg.max_blank_rate_increase_pct * rows * prev_rows:
+                errors.append(
+                    f"{src}（{key}）空白率 {blank[key] / rows:.2%} 比前版 "
+                    f"{prev[key] / prev_rows:.2%} 增加超過 {cfg.max_blank_rate_increase_pct} 個百分點")
+    return errors, warnings
 
 
 def golden_rewrites(shards, fixtures_dir):
@@ -331,7 +380,8 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
 
     errors, warnings, overridden = check_guards(
         stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
-        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes)
+        upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes,
+        index_bytes=files["drug_index.json"])
     warnings += golden_rewrites(shards, fixtures_dir)
     if errors:
         raise BuildError(errors, warnings)
@@ -368,6 +418,7 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
                 "overlapCodes", "gapCodes", "questionMarkCodes",
                 "inconsistentMetadataCodes", "openEndedRowAnomalies",
                 "upcomingRows", "upcomingCodes")},
+            "blankFieldRows": stats["blankFieldRows"],
             "coverageStart": stats["coverageStart"],
             "coverageEnd": stats["coverageEnd"],
         })

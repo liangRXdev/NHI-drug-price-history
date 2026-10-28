@@ -167,18 +167,33 @@ def _change(prev, new):
 
 
 def derive_events(records):
-    """就地寫入 eventType／previousPrice／absoluteChange／percentChange／crossesStop。"""
+    """就地寫入 eventType／previousPrice／absoluteChange／percentChange／crossesStop。
+
+    衝突組（同 from/to 異價）沒有唯一價格，§6.3 禁止以排序結果作為價格優先權：
+    - 前筆屬衝突組 → 本筆 unknown（「前一筆價格」只是組內排序最後的候選）
+    - 組內有 priced 候選 → 其後的「最後一個 priced 金額」同樣不唯一，直到再出現
+      單一有價列為止；期間需要該金額的事件（終止／暫停的 previousPrice、relisted）
+      一律 unknown，不取任一候選價
+    """
     last_priced = None
+    last_priced_ambiguous = False
     for i, r in enumerate(records):
         prev = records[i - 1] if i else None
         r.update(eventType=None, previousPrice=None, absoluteChange=None,
                  percentChange=None, crossesStop=False)
         state = r["priceState"]
+        conflicted = "conflicting_price_interval" in r["flags"]
+        needs_last_priced = (state in ("terminated", "suspended")
+                             and prev is not None and prev["priceState"] != state
+                             ) or (state == "priced" and prev is not None
+                                   and prev["priceState"] != "priced")
 
         if prev is None:                                                    # 序 1
             r["eventType"] = "initial"
         elif (state in UNKNOWN_STATES or prev["priceState"] in UNKNOWN_STATES
-              or "conflicting_price_interval" in r["flags"] or r.get("_overlapConflict")):
+              or conflicted or r.get("_overlapConflict")
+              or "conflicting_price_interval" in prev["flags"]
+              or (needs_last_priced and last_priced_ambiguous)):
             r["eventType"] = "unknown"                                      # 序 2
         elif state in ("terminated", "suspended"):
             if prev["priceState"] == state:
@@ -203,11 +218,19 @@ def derive_events(records):
 
         if state == "priced":
             last_priced = r["value"]
+            last_priced_ambiguous = conflicted
 
 
 # ── window 與描述欄位 ───────────────────────────────────────────
 def is_effective(r, day):
     return r["from"] <= day and (r["to"] is None or r["to"] >= day)
+
+
+def is_ambiguous(current):
+    """同日多筆有效紀錄是否無法判定單一價格：依 (priceState, value) 去重後超過一種，
+    或任一筆屬衝突組。同價重疊不是衝突（spec §5.4、§5.5「異價重疊」）。"""
+    return (len({_price_identity(r) for r in current}) > 1
+            or any("conflicting_price_interval" in r["flags"] for r in current))
 
 
 def build_window(records, build_date):
@@ -216,7 +239,7 @@ def build_window(records, build_date):
     upcoming = next((r for r in records if r["from"] > build_date), None)
     window = []
     if current:
-        window.append((current[0], {"conflict"} if len(current) > 1 else set()))
+        window.append((current[0], {"conflict"} if is_ambiguous(current) else set()))
     if upcoming is not None:
         window.append((upcoming, set()))
     return window
@@ -272,7 +295,7 @@ def summary_at(records, ref):
     effective = [r for r in records if r["from"] <= ref]
     current = [r for r in records if is_effective(r, ref)]
 
-    if len(current) > 1:
+    if is_ambiguous(current):
         status = "conflict"
     elif current:
         status = current[0]["priceState"]
@@ -299,7 +322,7 @@ def summary_at(records, ref):
     upcoming = next((r for r in records if r["from"] > ref), None)
     return {
         "status": status,
-        "current": current[0] if len(current) == 1 else None,
+        "current": current[0] if current and status != "conflict" else None,
         "currentCandidates": current,
         "upcoming": upcoming,
         "latestEvent": latest,

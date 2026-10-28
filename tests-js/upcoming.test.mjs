@@ -320,6 +320,21 @@ test('csvField 只在必要時加引號', () => {
   assert.equal(csvField('a\r\nb'), '"a\r\nb"');
 });
 
+// CSV 公式注入（OWASP）：以 = + - @ Tab CR 開頭的文字在試算表中會被當公式執行
+test('csvField 中和公式開頭，但數值、帶號百分比與單一暫停標記照原樣', () => {
+  for (const [input, want] of [
+    ['=HYPERLINK("http://x","y")', `"'=HYPERLINK(""http://x"",""y"")"`],
+    ['+cmd|calc', "'+cmd|calc"],
+    ['-1+1', "'-1+1"],
+    ['@SUM(A1)', "'@SUM(A1)"],
+    ['\t=1', "'\t=1"],
+    ['\r=1', `"'\r=1"`],
+  ]) assert.equal(csvField(input), want, JSON.stringify(input));
+  for (const keep of ['-6.90', '+14.49%', '−23.15%', '-', '－', '12.50', '0', '-0.5', 'abc=1']) {
+    assert.equal(csvField(keep), keep, keep);
+  }
+});
+
 // ── 日期合法性：與 Python validator 共用同一組案例（R4／T1）────────
 const DATE_CASES = JSON.parse(readFileSync(new URL('../tests/fixtures/dates.json', import.meta.url), 'utf8'));
 

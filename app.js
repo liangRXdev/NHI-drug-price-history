@@ -1190,6 +1190,7 @@ function renderCompare() {
     ? `已略過 ${state.compare.skipped} 個超出上限的代號。` : '';
 
   if (state.compareMismatch) { $('compareBody').innerHTML = ''; return; }
+  compareChartWidth = measureCompareWidth();
   const anyLoading = items.some((x) => (state.compareData.get(x.code) || {}).status === 'loading');
   // 首次載入才整頁骨架（不得先畫已到的序列）；重試期間必須保留已成功的結果
   const loading = anyLoading && !state.compareEverRendered;
@@ -1325,9 +1326,17 @@ const seriesValue = (s, seg) => (state.compareMode === 'rel'
   ? (s.baseline.kind === 'ok' ? Number(E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)) : null)
   : seg.price);
 
+// 比較頁自己的圖寬：不可沿用詳細頁的 chartWidth（直接開比較頁時從未量測，恆為 800）
+let compareChartWidth = 800;
+
+function measureCompareWidth() {
+  const inner = $('compareBody').clientWidth;
+  return Math.max(320, Math.min(900, Math.round(inner || 800)));
+}
+
 function compareChartHTML(m) {
   if (!m.range) return '<p class="hint">無可繪製的區間。</p>';
-  const W = chartWidth;
+  const W = compareChartWidth;
   const bandsH = (BAND_H + BAND_GAP) * m.series.length;
   const H = (W < 520 ? 240 : 300) + bandsH;
   const iw = W - CM.l - CM.r;
@@ -1344,10 +1353,13 @@ function compareChartHTML(m) {
 
   // 格線與 Y 軸
   if (m.hasValues) {
-    for (const v of E.niceTicks(m.yMin, m.yMax, 5)) {
+    const ticks = E.niceTicks(m.yMin, m.yMax, 5);
+    // 相對模式依刻度間距決定小數位：窄範圍（如 99.6–100.4）一律取整會出現重複標籤
+    const labels = state.compareMode === 'rel' ? E.tickLabels(ticks) : ticks.map(E.fmtMoney);
+    ticks.forEach((v, i) => {
       parts.push(`<g class="grid"><line x1="${CM.l}" x2="${W - CM.r}" y1="${f(y(v))}" y2="${f(y(v))}"/></g>
-        <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(state.compareMode === 'rel' ? v.toFixed(0) : E.fmtMoney(v))}</text>`);
-    }
+        <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(labels[i])}</text>`);
+    });
     // 相對模式的 Y 軸不得標成「價格」或任何貨幣單位（§4.1）
     parts.push(`<text class="y-unit" x="${CM.l - 6}" y="${CM.t - 5}" text-anchor="end">${state.compareMode === 'rel' ? '指數（各自基準＝100）' : '元'}</text>`);
   }
@@ -1384,8 +1396,8 @@ function compareChartHTML(m) {
       const gy = y(v);
       const cls = `cmp-line s${s.slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
       const val = state.compareMode === 'rel'
-        ? ` data-index="${E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)}"`
-        : ` data-price="${seg.rawPrice}"`;
+        ? ` data-index="${esc(E.relativeIndex(seg.rawPrice, s.baseline.rawPrice))}"`
+        : ` data-price="${esc(seg.rawPrice)}"`;
       // 相鄰且價格不同才連垂直線；空窗與非有價區間之後 prev 已清空
       if (prev && prev.nextX === gx0 && prev.y !== gy) {
         parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx0)}" y1="${f(prev.y)}" y2="${f(gy)}"/>`);
@@ -1622,10 +1634,7 @@ function eventRowHTML(row, name, T) {
       <td>${esc(name || '')}</td><td>${esc(r.rawPrice)}</td><td>—</td><td>—</td>
       <td>日期異常（${esc(E.INVALID_TEXT[r.error] || r.error)}）</td></tr>`;
   }
-  const notes = [];
-  if (r.from > T) notes.push('預告');
-  if (r.crossesStop) notes.push('跨越停止期間');
-  if ((r.flags || []).includes('gap_before')) notes.push('前有空窗');
+  const note = E.eventNote(r, T);
   return `<tr data-row="${id}" data-slot="${row.slot + 1}"${r.from > T ? ' class="upcoming-row-tr"' : ''}>
     <td class="mono">${esc(r.from)}</td><td class="mono">${esc(r.to ?? '—')}</td>
     <td><span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(row.code)}</span></td>
@@ -1633,7 +1642,7 @@ function eventRowHTML(row, name, T) {
     <td>${esc(E.stateLabel(r, row.prior, 'cell'))}</td>
     <td class="num">${esc(r.absoluteChange === null ? '—' : E.fmtSigned(E.fmtMoney(r.absoluteChange)))}</td>
     <td class="num">${esc(r.percentChange === null ? '—' : E.fmtPct(r.percentChange))}</td>
-    <td>${esc(E.eventText(r, row.prior))}${notes.length ? `（${esc(notes.join('、'))}）` : ''}</td></tr>`;
+    <td>${esc(E.eventText(r, row.prior))}${note ? `（${esc(note)}）` : ''}</td></tr>`;
 }
 
 function exportCompareCSV() {
@@ -1797,6 +1806,7 @@ function bind() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       if (state.current && Math.abs(measureChartWidth() - chartWidth) > 40) renderDetail();
+      if (!$('compareView').hidden && Math.abs(measureCompareWidth() - compareChartWidth) > 40) renderCompare();
     }, 200);
   });
 }

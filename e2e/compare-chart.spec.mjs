@@ -1,7 +1,7 @@
 // 多序列圖表（spec-compare.md §4）：M8 band、M9 首列 0 元、M11 無線狀態、
 // M12 空窗、M13 crosshair、§4.2.1 可見性與選定集合的分野。
 import { test, expect } from '@playwright/test';
-import { mockSite } from './mock.mjs';
+import { buildData, mockSite } from './mock.mjs';
 
 const FOUR = 'A035680329,AC48867100,B009254100,A020296321';
 const chart = (page) => page.locator('.cmp-chart');
@@ -197,4 +197,29 @@ test('M10 停止後恢復支付的區間也以同一基準計算', async ({ page
   // 2017-12-01 恢復支付 22.90 ÷ 32.30 = 70.9；終止期間不產生線段
   expect(idx).toContain('70.9');
   expect(idx.filter((v) => v === '0.0')).toHaveLength(0);
+});
+
+// ── Low：比較圖寬度依比較頁容器量測（原本沿用詳細頁的 chartWidth，直接開比較頁恆為 800）──
+test('比較圖 viewBox 寬度隨容器，窄螢幕不得固定 800', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'AC48867100,A020296321');
+  const vbWidth = async () => Number((await chart(page).getAttribute('viewBox')).split(' ')[2]);
+  const container = async () => page.locator('#compareBody').evaluate((el) => el.clientWidth);
+  expect(await vbWidth()).toBeLessThanOrEqual(Math.max(320, await container()));
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect.poll(vbWidth).toBeGreaterThan(600);           // resize 後重繪
+});
+
+// ── Low：data-price 屬性必須跳脫（rawPrice 來自資料檔，不可信任為安全字串）──
+test('data-price 屬性跳脫 rawPrice，不得注入 DOM', async ({ page }) => {
+  const data = buildData();
+  const recs = data.shards.AC48.drugs.AC48867100.records;
+  const evil = '32.30"><b id="pwn">x</b>';
+  recs[0].rawPrice = evil;
+  await open(page, 'AC48867100,A020296321', { data });
+  await expect(page.locator('#pwn')).toHaveCount(0);
+  const prices = await page.locator('.cmp-line[data-code="AC48867100"][data-price]')
+    .evaluateAll((els) => els.map((el) => el.dataset.price));
+  expect(prices[0]).toBe(evil);
 });
