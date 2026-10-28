@@ -1190,6 +1190,7 @@ function renderCompare() {
     ? `已略過 ${state.compare.skipped} 個超出上限的代號。` : '';
 
   if (state.compareMismatch) { $('compareBody').innerHTML = ''; return; }
+  compareChartWidth = measureCompareWidth();
   const anyLoading = items.some((x) => (state.compareData.get(x.code) || {}).status === 'loading');
   // 首次載入才整頁骨架（不得先畫已到的序列）；重試期間必須保留已成功的結果
   const loading = anyLoading && !state.compareEverRendered;
@@ -1325,9 +1326,17 @@ const seriesValue = (s, seg) => (state.compareMode === 'rel'
   ? (s.baseline.kind === 'ok' ? Number(E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)) : null)
   : seg.price);
 
+// 比較頁自己的圖寬：不可沿用詳細頁的 chartWidth（直接開比較頁時從未量測，恆為 800）
+let compareChartWidth = 800;
+
+function measureCompareWidth() {
+  const inner = $('compareBody').clientWidth;
+  return Math.max(320, Math.min(900, Math.round(inner || 800)));
+}
+
 function compareChartHTML(m) {
   if (!m.range) return '<p class="hint">無可繪製的區間。</p>';
-  const W = chartWidth;
+  const W = compareChartWidth;
   const bandsH = (BAND_H + BAND_GAP) * m.series.length;
   const H = (W < 520 ? 240 : 300) + bandsH;
   const iw = W - CM.l - CM.r;
@@ -1797,6 +1806,7 @@ function bind() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       if (state.current && Math.abs(measureChartWidth() - chartWidth) > 40) renderDetail();
+      if (!$('compareView').hidden && Math.abs(measureCompareWidth() - compareChartWidth) > 40) renderCompare();
     }, 200);
   });
 }
