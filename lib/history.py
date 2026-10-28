@@ -226,13 +226,20 @@ def is_effective(r, day):
     return r["from"] <= day and (r["to"] is None or r["to"] >= day)
 
 
+def is_ambiguous(current):
+    """同日多筆有效紀錄是否無法判定單一價格：依 (priceState, value) 去重後超過一種，
+    或任一筆屬衝突組。同價重疊不是衝突（spec §5.4、§5.5「異價重疊」）。"""
+    return (len({_price_identity(r) for r in current}) > 1
+            or any("conflicting_price_interval" in r["flags"] for r in current))
+
+
 def build_window(records, build_date):
     """spec §5.1：[build 日有效區間, 最早未生效區間]；回傳 (record, extra_flags) 清單。"""
     current = [r for r in records if is_effective(r, build_date)]
     upcoming = next((r for r in records if r["from"] > build_date), None)
     window = []
     if current:
-        window.append((current[0], {"conflict"} if len(current) > 1 else set()))
+        window.append((current[0], {"conflict"} if is_ambiguous(current) else set()))
     if upcoming is not None:
         window.append((upcoming, set()))
     return window
@@ -288,7 +295,7 @@ def summary_at(records, ref):
     effective = [r for r in records if r["from"] <= ref]
     current = [r for r in records if is_effective(r, ref)]
 
-    if len(current) > 1:
+    if is_ambiguous(current):
         status = "conflict"
     elif current:
         status = current[0]["priceState"]
@@ -315,7 +322,7 @@ def summary_at(records, ref):
     upcoming = next((r for r in records if r["from"] > ref), None)
     return {
         "status": status,
-        "current": current[0] if len(current) == 1 else None,
+        "current": current[0] if current and status != "conflict" else None,
         "currentCandidates": current,
         "upcoming": upcoming,
         "latestEvent": latest,

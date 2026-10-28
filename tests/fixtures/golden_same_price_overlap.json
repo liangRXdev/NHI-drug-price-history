@@ -1,0 +1,55 @@
+{
+  "_comment": "M2 跨語言 golden（spec §5.4「同價的 overlap 不視為衝突」、§5.5「多筆（衝突／異價重疊）」）。預期值為人工凍結，不得以任一端輸出回寫。S…101＝同價重疊（含 10.00 與 10.0 字面不同但同值）；S…102＝異價重疊對照組；S…103＝同價重疊但其中一筆另帶衝突組（仍須判衝突）。",
+  "indexDates": ["2020-05-01", "2020-08-01"],
+  "codes": {
+    "S000000101": {
+      "rows": [
+        {"price": "10.00", "from": "1090101", "to": "1091231"},
+        {"price": "10.0", "from": "1090701", "to": "9991231"}
+      ],
+      "summaries": {
+        "2020-03-01": {"status": "priced", "current": {"from": "2020-01-01", "rawPrice": "10.00"}, "candidates": 1},
+        "2020-08-01": {"status": "priced", "current": {"from": "2020-01-01", "rawPrice": "10.00"}, "candidates": 2},
+        "2021-03-01": {"status": "priced", "current": {"from": "2020-07-01", "rawPrice": "10.0"}, "candidates": 1}
+      },
+      "dayState": {"2020-03-01": "priced", "2020-08-01": "priced", "2021-03-01": "priced"},
+      "indexConflict": {"2020-05-01": false, "2020-08-01": false},
+      "searchCard": {
+        "2020-05-01": {"2020-08-01": {"kind": "conflict", "text": "來源紀錄區間重疊，請開啟詳細頁確認"}},
+        "2020-08-01": {"2020-08-01": {"kind": "priced", "text": "10.00 元"}}
+      }
+    },
+    "S000000102": {
+      "rows": [
+        {"price": "10.00", "from": "1090101", "to": "1091231"},
+        {"price": "12.00", "from": "1090701", "to": "9991231"}
+      ],
+      "summaries": {
+        "2020-03-01": {"status": "priced", "current": {"from": "2020-01-01", "rawPrice": "10.00"}, "candidates": 1},
+        "2020-08-01": {"status": "conflict", "current": null, "candidates": 2},
+        "2021-03-01": {"status": "priced", "current": {"from": "2020-07-01", "rawPrice": "12.00"}, "candidates": 1}
+      },
+      "dayState": {"2020-03-01": "priced", "2020-08-01": "conflict", "2021-03-01": "priced"},
+      "indexConflict": {"2020-05-01": false, "2020-08-01": true},
+      "searchCard": {
+        "2020-05-01": {"2020-08-01": {"kind": "conflict", "text": "來源紀錄衝突，無法判定單一支付價"}},
+        "2020-08-01": {"2020-08-01": {"kind": "conflict", "text": "來源紀錄衝突，無法判定單一支付價"}}
+      }
+    },
+    "S000000103": {
+      "rows": [
+        {"price": "10.00", "from": "1090101", "to": "1091231"},
+        {"price": "10.00", "from": "1090701", "to": "9991231"},
+        {"price": "11.00", "from": "1090701", "to": "9991231"}
+      ],
+      "summaries": {
+        "2020-08-01": {"status": "conflict", "current": null, "candidates": 3}
+      },
+      "dayState": {"2020-08-01": "conflict"},
+      "indexConflict": {"2020-08-01": true},
+      "searchCard": {
+        "2020-08-01": {"2020-08-01": {"kind": "conflict", "text": "來源紀錄衝突，無法判定單一支付價"}}
+      }
+    }
+  }
+}

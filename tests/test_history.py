@@ -477,3 +477,39 @@ def test_conflict_status():
     recs = records_of([make_row(price="10.00", frm="1150101"), make_row(price="12.00", frm="1150101")])
     s = summary_at(recs, D)
     assert s["status"] == "conflict" and s["current"] is None and len(s["currentCandidates"]) == 2
+
+
+# ── M2 同價重疊不是衝突（spec §5.4、§5.5；跨語言 golden）────────────
+SAME_PRICE = json.loads((Path(__file__).parent / "fixtures" / "golden_same_price_overlap.json")
+                        .read_text(encoding="utf-8"))
+
+
+def same_price_records(code):
+    rows = [make_row(code=code, price=r["price"], frm=r["from"], to=r["to"])
+            for r in SAME_PRICE["codes"][code]["rows"]]
+    return records_of(rows, code)
+
+
+@pytest.mark.parametrize("code,ref", [(c, ref) for c, case in SAME_PRICE["codes"].items()
+                                      for ref in case["summaries"]])
+def test_same_price_overlap_summary_matches_golden(code, ref):
+    want = SAME_PRICE["codes"][code]["summaries"][ref]
+    s = summary_at(same_price_records(code), date.fromisoformat(ref))
+    cur = s["current"] and {"from": s["current"]["from"].isoformat(),
+                            "rawPrice": s["current"]["rawPrice"]}
+    assert (s["status"], cur, len(s["currentCandidates"])) == (
+        want["status"], want["current"], want["candidates"])
+
+
+@pytest.mark.parametrize("code,day", [(c, d) for c, case in SAME_PRICE["codes"].items()
+                                      for d in case["indexConflict"]])
+def test_same_price_overlap_window_conflict_flag_matches_golden(code, day):
+    window = build_window(same_price_records(code), date.fromisoformat(day))
+    assert ("conflict" in window[0][1]) is SAME_PRICE["codes"][code]["indexConflict"][day]
+
+
+def test_same_price_overlap_event_is_unchanged_not_unknown():
+    """§5.4：同價 overlap 照序 3–10 判定，只加 overlap flag（10.00 與 10.0 同值）。"""
+    recs = same_price_records("S000000101")
+    assert [(r["eventType"], sorted(r["flags"])) for r in recs] == [
+        ("initial", []), ("unchanged", ["overlap"])]

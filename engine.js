@@ -100,14 +100,25 @@ export function decimalChange(prevRaw, newRaw) {
 }
 
 // ── 摘要（spec §5.5）─────────────────────────────────────────────
+const CONFLICT_FLAG = 'conflicting_price_interval';
+
+/**
+ * 同日多筆有效紀錄是否無法判定單一價格：依 (priceState, price) 去重後超過一種，或任一筆
+ * 屬衝突組。同價重疊不是衝突（spec §5.4、§5.5「異價重疊」）；與 history.py is_ambiguous() 同義。
+ */
+export function isAmbiguous(effective) {
+  return new Set(effective.map((r) => `${r.priceState}|${r.price}`)).size > 1
+    || effective.some((r) => (r.flags || []).includes(CONFLICT_FLAG));
+}
+
 /** 參考日 ref 的摘要；預告區間（from > ref）一律不計入統計。records 須已依 §6.2 排序。 */
 export function summaryAt(records, ref) {
   const effective = records.filter((r) => r.from <= ref);
   const current = records.filter((r) => isEffective(r, ref));
 
   let status;
-  if (current.length > 1) status = 'conflict';
-  else if (current.length === 1) status = current[0].priceState;
+  if (isAmbiguous(current)) status = 'conflict';
+  else if (current.length) status = current[0].priceState;
   else if (records.length === 0 || ref < records[0].from) status = 'not_yet_effective';
   else if (records.some((r) => r.from > ref)) status = 'gap';
   else status = 'no_record';
@@ -128,7 +139,7 @@ export function summaryAt(records, ref) {
     totalChange = { first, last, ...decimalChange(first.rawPrice, last.rawPrice) };
   }
 
-  const current1 = current.length === 1 ? current[0] : null;
+  const current1 = current.length && status !== 'conflict' ? current[0] : null;
   return {
     ref,
     status,
@@ -339,12 +350,13 @@ export function searchCard(drug, T) {
   if (i >= 0) {
     const r = w[i];
     // T 當日多筆有效（build 後預告生效又與現行重疊）或來源標示衝突／重疊 → 不給單一價格（codex R2）
+    // 同價重疊（去重後只剩一種價格／狀態）不是衝突（spec §5.4）
     const flagged = (f) => effective.some((x) => x.flags.includes(f));
-    if (effective.length > 1 || flagged('conflict') || flagged('conflicting_price_interval') || flagged('overlap')) {
+    const ambiguous = isAmbiguous(effective) || flagged('conflict');
+    if (ambiguous || flagged('overlap')) {
       const later = w.findIndex((x) => x.from > T);
-      // 單筆帶 overlap：重疊對象可能不在 window 內，搜尋卡無從判定 → 要求開詳細頁，不稱「衝突」
-      const text = effective.length === 1 && !flagged('conflict') && !flagged('conflicting_price_interval')
-        ? '來源紀錄區間重疊，請開啟詳細頁確認' : '來源紀錄衝突，無法判定單一支付價';
+      // 只帶 overlap：重疊對象可能不在 window 內，搜尋卡無從判定 → 要求開詳細頁，不稱「衝突」
+      const text = ambiguous ? '來源紀錄衝突，無法判定單一支付價' : '來源紀錄區間重疊，請開啟詳細頁確認';
       return { kind: 'conflict', text, upcoming: later >= 0 ? upcomingOf(later) : null, rawPrice: null };
     }
     return {
@@ -947,8 +959,8 @@ export function dayState(records, day, priors = priorPrices(records)) {
   if (!bounds) return { rule: 0, kind: 'no_records', tooltip: '無有效支付紀錄', record: null };
 
   const eff = records.filter((r) => isEffective(r, day));
-  // 衝突 flag 只作用於帶該 flag 的那筆紀錄所涵蓋的日期，不擴張到首筆前或空窗
-  if (eff.length > 1 || eff.some((r) => (r.flags || []).includes('conflicting_price_interval'))) {
+  // 衝突 flag 只作用於帶該 flag 的那筆紀錄所涵蓋的日期，不擴張到首筆前或空窗；同價重疊不是衝突
+  if (isAmbiguous(eff)) {
     return { rule: 1, kind: 'conflict', tooltip: '來源紀錄衝突，無法判定單一支付價', record: null };
   }
   if (day < bounds.min) return { rule: 2, kind: 'before', tooltip: '尚未有紀錄', record: null };
