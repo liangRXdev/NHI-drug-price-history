@@ -1,5 +1,6 @@
 """B1–B8 建置與 CI 安全（plan.md §5）。"""
 
+import http.client
 import json
 import re
 import subprocess
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import requests
+import urllib3
 
 import build_price_history as bph
 from build_price_history import BuildError, GuardConfig, check_guards, gzip_size, run
@@ -52,11 +54,18 @@ def fake_get(*outcomes):
     return get, calls
 
 
+# 分鐘級退避（30s 起、上限 5min）：2026-10 三次排程皆在台灣凌晨 RemoteDisconnected，
+# 舊的 5、10 秒退避 15 秒內就耗盡重試，撐不過端點的維護窗
+BACKOFF = [30, 60, 120, 240, 300]
+
+
 @pytest.mark.parametrize("outcome,expected_calls,expected_sleeps", [
-    (FakeResp(500), 3, [5, 10]),
-    (FakeResp(429), 3, [5, 10]),
-    (requests.Timeout("timeout"), 3, [5, 10]),
-    (requests.exceptions.SSLError("bad cert"), 3, [5, 10]),
+    (FakeResp(500), 6, BACKOFF),
+    (FakeResp(429), 6, BACKOFF),
+    (requests.Timeout("timeout"), 6, BACKOFF),
+    (requests.exceptions.SSLError("bad cert"), 6, BACKOFF),
+    (requests.ConnectionError(http.client.RemoteDisconnected("Remote end closed connection")),
+     6, BACKOFF),
     (FakeResp(404), 1, []),                                  # 4xx（非 429）不重試
 ])
 def test_download_failures_raise_after_policy(outcome, expected_calls, expected_sleeps):
@@ -71,6 +80,46 @@ def test_download_failures_raise_after_policy(outcome, expected_calls, expected_
 def test_download_recovers_on_retry():
     get, _ = fake_get(FakeResp(503), FakeResp(200, b"ok"))
     assert nhi.download("https://x.invalid", "t", get=get, sleep=lambda s: None) == b"ok"
+
+
+class BrokenBody(FakeResp):
+    """回應已開始、讀 body 時連線中斷：例外可能未經 requests 包裝就冒出來。"""
+    def __init__(self, exc):
+        super().__init__(200)
+        self.exc = exc
+
+    def iter_content(self, chunk_size):
+        raise self.exc
+        yield b""
+
+
+RAW_CONNECTION_ERRORS = [
+    http.client.RemoteDisconnected("Remote end closed connection without response"),
+    http.client.IncompleteRead(b"partial"),
+    ConnectionResetError(104, "Connection reset by peer"),
+    urllib3.exceptions.ProtocolError("Connection aborted."),
+]
+
+
+@pytest.mark.parametrize("exc", RAW_CONNECTION_ERRORS, ids=lambda e: type(e).__name__)
+@pytest.mark.parametrize("where", ["get", "body"])
+def test_download_retries_raw_connection_errors(exc, where):
+    """未包裝的連線例外也要重試，且最後轉成 SourceError（不可變成無訊息的 crash）。"""
+    get, calls = fake_get(exc if where == "get" else BrokenBody(exc))
+    sleeps = []
+    with pytest.raises(nhi.SourceError):
+        nhi.download("https://x.invalid", "t", get=get, sleep=sleeps.append)
+    assert len(calls) == 6 and sleeps == BACKOFF
+
+
+@pytest.mark.parametrize("exc", RAW_CONNECTION_ERRORS, ids=lambda e: type(e).__name__)
+def test_download_recovers_after_raw_connection_error(exc):
+    get, _ = fake_get(BrokenBody(exc), FakeResp(200, b"ok"))
+    assert nhi.download("https://x.invalid", "t", get=get, sleep=lambda s: None) == b"ok"
+
+
+def test_retry_backoff_is_capped():
+    assert [nhi.retry_wait(n) for n in range(1, 9)] == [30, 60, 120, 240, 300, 300, 300, 300]
 
 
 BAD_BODIES = {

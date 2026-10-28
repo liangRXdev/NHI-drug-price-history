@@ -8,6 +8,7 @@
 """
 
 import csv
+import http.client
 import io
 import sys
 import time
@@ -15,14 +16,19 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 import requests
+import urllib3
 
 NHI_CSV_URL = "https://info.nhi.gov.tw/api/iode0000s01/Dataset?rId=A21030000I-E41001-001"
 DATAGOV_META_URL = "https://data.gov.tw/api/v2/rest/dataset/23715"
 SOURCE_ID = "NHIA A21030000I-E41001-001"
 
 TIMEOUT_SEC = 180
-MAX_RETRIES = 3
-RETRY_BASE_SEC = 5   # 指數退避：5、10、20…
+# 分鐘級退避：30、60、120、240、300 秒（共約 12.5 分鐘）。2026-10 三次排程皆在台灣凌晨
+# 因 RemoteDisconnected 連 3 次失敗，舊的 5、10 秒退避 15 秒內就耗盡重試。
+# workflow 的 timeout-minutes 須涵蓋 MAX_RETRIES × TIMEOUT_SEC ＋ 全部退避（tests/test_workflow.py）
+MAX_RETRIES = 6
+RETRY_BASE_SEC = 30
+RETRY_MAX_SEC = 300
 
 OPEN_END_SENTINEL = "9991231"
 
@@ -54,6 +60,11 @@ FIELDS = {
     "nhiRuleLink":  (("給付規定章節連結",), False),
 }
 
+# 未經 requests 包裝就冒出的連線例外：讀 body 中途斷線時，http.client／urllib3／socket
+# 層的例外可能直接穿過 iter_content。不納入就會變成沒有訊息的 crash，也不會重試
+RAW_CONNECTION_ERRORS = (http.client.HTTPException, urllib3.exceptions.HTTPError,
+                         ConnectionError, TimeoutError)
+
 # 下載／解析階段預期的例外。刻意不 catch Exception：print() 的
 # UnicodeEncodeError 若被吞掉會偽裝成「下載失敗」（舊專案 2026-07-20 踩過）
 FETCH_ERRORS = (requests.RequestException, csv.Error, OSError, UnicodeDecodeError)
@@ -77,6 +88,11 @@ def is_retryable(exc):
     return code == 429 or code >= 500
 
 
+def retry_wait(attempt):
+    """第 attempt 次失敗後的等待秒數：30 秒起倍增，上限 5 分鐘。"""
+    return min(RETRY_BASE_SEC * (2 ** (attempt - 1)), RETRY_MAX_SEC)
+
+
 def download(url, label, max_retries=MAX_RETRIES, sleep=time.sleep, get=requests.get):
     """下載並回傳 bytes；一律驗證 TLS。失敗 raise SourceError。
 
@@ -91,13 +107,13 @@ def download(url, label, max_retries=MAX_RETRIES, sleep=time.sleep, get=requests
             data = b"".join(resp.iter_content(chunk_size=1024 * 1024))
             log(f"  ✓ {label}：{len(data) / 1e6:.2f} MB")
             return data
-        except requests.RequestException as e:
-            if not is_retryable(e):
+        except (requests.RequestException, *RAW_CONNECTION_ERRORS) as e:
+            if isinstance(e, requests.RequestException) and not is_retryable(e):
                 raise SourceError(f"{label} 下載失敗（不可重試）：{e}") from e
             if attempt >= max_retries:
-                raise SourceError(f"{label} 下載失敗（已重試 {max_retries} 次）：{e}") from e
-            wait = RETRY_BASE_SEC * (2 ** (attempt - 1))
-            log(f"  ⚠ {label} 第 {attempt} 次失敗，{wait} 秒後重試：{e}")
+                raise SourceError(f"{label} 下載失敗（已重試 {max_retries} 次）：{e!r}") from e
+            wait = retry_wait(attempt)
+            log(f"  ⚠ {label} 第 {attempt} 次失敗，{wait} 秒後重試：{e!r}")
             sleep(wait)
     raise SourceError(f"{label} 下載失敗")  # max_retries < 1 時才會到這裡
 
