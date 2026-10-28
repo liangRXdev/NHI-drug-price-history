@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import * as Eng from '../engine.js';
 
 import { searchCard, selectMeta, summaryAt, pricedBefore, currentLabel, latestEventLabel, dayState } from '../engine.js';
 
@@ -163,3 +164,77 @@ for (const [code, want] of Object.entries(samePrice.codes)) {
     }
   }
 }
+
+// ── pricedBefore 三態（spec.md §5.1）：與 Python 同一份人工凍結預期值 ──────────
+// 衝突組之後、尚未出現單一有價列前，前價不唯一：不得取任一候選價，也不得觸發 §5.3 首列 0 元例外
+const pbGolden = JSON.parse(readFileSync(new URL('golden_priced_before_ambiguous.json', FIX), 'utf8'));
+const pbFront = JSON.parse(readFileSync(new URL('golden_frontend_priced_before_ambiguous.json', FIX), 'utf8'));
+const pbToken = (v) => (v === Eng.PRIOR_AMBIGUOUS ? 'AMBIGUOUS' : v);
+
+for (const [code, want] of Object.entries(pbGolden.codes)) {
+  const recs = pbFront.shards[code].records;
+
+  test(`三態 ${code} 事件與 priorPrices 與 golden 一致`, () => {
+    assert.deepEqual(recs.map((r) => r.eventType), want.events);
+    const priors = Eng.priorPrices(recs);
+    assert.deepEqual(recs.map((r) => pbToken(priors.get(r))), want.priors);
+    assert.deepEqual(recs.map((r) => pbToken(Eng.pricedBefore(recs, r))), want.priors);
+  });
+
+  for (const [day, [rule, tooltip]] of Object.entries(want.dayState)) {
+    test(`三態 ${code} ${day} dayState 與 golden 一致`, () => {
+      const st = Eng.dayState(recs, day);
+      assert.deepEqual([st.rule, st.tooltip], [rule, tooltip]);
+    });
+  }
+
+  for (const [day, label] of Object.entries(want.currentLabel)) {
+    test(`三態 ${code} ${day} 現行支付價標籤與 golden 一致`, () => {
+      assert.equal(Eng.currentLabel(Eng.summaryAt(recs, day)), label);
+    });
+  }
+
+  test(`三態 ${code} 圖表區塊：不唯一不得落入「此前無有價」`, () => {
+    const kinds = new Map(Eng.chartModel(recs, '2024-01-01').bands.map((b) => [b.record, b.kind]));
+    assert.deepEqual(recs.map((r) => kinds.get(r) ?? null), want.bandKinds);
+  });
+
+  for (const [indexDate, byT] of Object.entries(want.searchCard)) {
+    for (const [T, [kind, text, upcoming]] of Object.entries(byT)) {
+      test(`三態 ${code} index ${indexDate}／T ${T} 搜尋卡與 golden 一致`, () => {
+        const card = Eng.searchCard(pbFront.index[indexDate][code], T);
+        assert.deepEqual([card.kind, card.text, card.upcoming], [kind, text, upcoming]);
+      });
+    }
+  }
+
+  for (const [indexDate, decisions] of Object.entries(want.upcomingDecision)) {
+    test(`三態 ${code} upcoming ${indexDate} 呈現決策與 golden 一致`, () => {
+      const items = pbFront.upcoming[indexDate].items.filter((it) => it.code === code);
+      assert.deepEqual(items.map((it) => { const d = Eng.upcomingDecision(it); return [d.rule, d.label, d.sub]; }), decisions);
+    });
+  }
+}
+
+for (const day of pbGolden.indexDates) {
+  test(`三態 upcoming ${day} 含不唯一列仍通過前端 validator`, () => {
+    assert.deepEqual(Eng.validateUpcoming(pbFront.upcoming[day], { dataVersion: 'sha256:golden' }), { ok: true });
+  });
+}
+
+test('三態：不唯一的 0 元不是首列 0 元例外（事件欄、歷史表、預告標籤）', () => {
+  const recs = pbFront.shards.P000000201.records;
+  const prior = Eng.priorPrices(recs).get(recs[4]);
+  assert.equal(prior, Eng.PRIOR_AMBIGUOUS);
+  assert.equal(Eng.isUnpricedZero(recs[4], prior), false);
+  assert.equal(Eng.stateLabel(recs[4], prior, 'cell'), '健保支付價 0 元（已終止支付）');
+  assert.equal(Eng.upcomingLabel(recs[4], prior), '⚠ 2023-01-01 起終止支付');
+  assert.notEqual(Eng.eventText({ ...recs[4], eventType: 'terminated' }, prior), '0 元（此前無有價紀錄）');
+});
+
+test('三態：預告 CSV 的變動前支付價不得留空（空欄會被讀成此前無有價）', () => {
+  const items = pbFront.upcoming['2022-06-01'].items.filter((it) => it.code === 'P000000202');
+  const params = { type: 'all', atc: '', date: '', q: '', sort: 'date_asc' };
+  const csv = Eng.upcomingCSV(Eng.upcomingModel(items, params).rows, { buildDate: '2022-06-01', params, today: '2022-06-01' });
+  assert.match(csv.split('\r\n')[2], /,不唯一（來源紀錄衝突）,/);
+});

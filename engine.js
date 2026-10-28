@@ -155,20 +155,61 @@ export function summaryAt(records, ref) {
 }
 
 /**
- * 每筆 record → 其之前最後一個 priced 金額（null＝此前從未有價）；一次掃描。
- * 與 index window 的 pricedBefore 同義；摘要、圖表、歷史表共用，避免各處各算一次而漂移。
+ * pricedBefore 三態之一：前價不唯一（衝突組之後，spec.md §5.1）。以 === 比對。
+ * 用 Symbol：任何漏處理的字串插值或 fmtMoney 都會直接拋錯，不會靜默顯示成金額。
+ */
+export const PRIOR_AMBIGUOUS = Symbol('pricedBeforeAmbiguous');
+
+const CONFLICT = 'conflicting_price_interval';
+const hasConflict = (r) => (r.flags || []).includes(CONFLICT);
+
+/**
+ * 每筆 record → 其之前最後一個 priced 金額（spec.md §5.1 三態）：數值（唯一前價）、
+ * null（此前從未有價）或 PRIOR_AMBIGUOUS（前價不唯一）；一次掃描。
+ *
+ * - 衝突組（帶 conflicting_price_interval、同 from/to）成員彼此不算「之前」：組內每一列取組前狀態
+ * - 組內有 priced 候選 → 組後為 PRIOR_AMBIGUOUS，直到再出現單一有價列；組內全為非 priced 則不影響
+ *
+ * 與 history.py prior_prices() 同規則（跨語言 golden）；與 index window／upcoming 的
+ * pricedBefore 同義。摘要、圖表、歷史表共用，避免各處各算一次而漂移。
  */
 export function priorPrices(records) {
   const out = new Map();
   let last = null;
-  for (const r of records) {
-    out.set(r, last);
-    if (r.priceState === 'priced') last = r.price;
+  for (let i = 0; i < records.length;) {
+    const r = records[i];
+    if (!hasConflict(r)) {
+      out.set(r, last);
+      if (r.priceState === 'priced') last = r.price;
+      i += 1;
+      continue;
+    }
+    let j = i;
+    let pricedCandidate = false;
+    while (j < records.length && hasConflict(records[j])
+           && records[j].from === r.from && records[j].to === r.to) {
+      out.set(records[j], last);
+      if (records[j].priceState === 'priced') pricedCandidate = true;
+      j += 1;
+    }
+    if (pricedCandidate) last = PRIOR_AMBIGUOUS;
+    i = j;
   }
   return out;
 }
 
-/** target 之前最後一個 priced 金額。 */
+/** index window／upcoming 列的 pricedBefore 線上編碼 → 三態值（undefined＝舊版 index 缺欄位）。 */
+export function wirePrior(r) {
+  return r.pricedBeforeAmbiguous === true ? PRIOR_AMBIGUOUS : r.pricedBefore;
+}
+
+/** 「終止前 X 元」／「暫停前 X 元」；前價不唯一時改為「…前支付價不唯一（來源紀錄衝突）」，不取任一候選價。 */
+export function priorPhrase(prior, stop) {
+  const head = stop === 'suspended' ? '暫停前' : '終止前';
+  return prior === PRIOR_AMBIGUOUS ? `${head}支付價不唯一（來源紀錄衝突）` : `${head} ${fmtMoney(prior)} 元`;
+}
+
+/** target 之前最後一個 priced 金額（三態）。 */
 export function pricedBefore(records, target) {
   const v = priorPrices(records).get(target);
   return v === undefined ? null : v;
@@ -236,10 +277,10 @@ export function stateLabel(r, prior, mode = 'current') {
       if (prior === null) return '健保支付價 0 元（此前無有價紀錄）';
       return mode === 'cell'
         ? '健保支付價 0 元（已終止支付）'
-        : `已終止支付（終止前 ${fmtMoney(prior)} 元）`;
+        : `已終止支付（${priorPhrase(prior, 'terminated')}）`;
     case 'suspended': {
       const base = `暫停支付（來源標示 ${r.rawPrice}）`;
-      return mode === 'cell' || prior === null ? base : `${base}，暫停前 ${fmtMoney(prior)} 元`;
+      return mode === 'cell' || prior === null ? base : `${base}，${priorPhrase(prior, 'suspended')}`;
     }
     case 'missing':
       return '來源無支付價資料';
@@ -338,13 +379,14 @@ export function searchCard(drug, T) {
   const w = drug.window || [];
   if (w.length === 0) return { kind: 'none', text: '目前無有效支付紀錄', upcoming: null, rawPrice: null };
   // 舊版 index 缺 pricedBefore：停止狀態的「終止前 X 元」與首列 0 元例外都無法判定，保守要求開詳細頁（codex R1）
-  if (w.some((r) => r.pricedBefore === undefined && r.priceState !== 'priced')) return NEEDS_UPDATE;
+  // 前價不唯一以「省略鍵＋pricedBeforeAmbiguous」編碼，不屬缺欄位（spec.md §5.1）
+  if (w.some((r) => wirePrior(r) === undefined && r.priceState !== 'priced')) return NEEDS_UPDATE;
 
   const effective = w.filter((r) => isEffective(r, T));
   const i = w.findIndex((r) => isEffective(r, T));
   const upcomingOf = (j) => {
     const u = w.slice(j).find((r) => r.from > T);
-    return u ? upcomingLabel(u, u.pricedBefore) : null;
+    return u ? upcomingLabel(u, wirePrior(u)) : null;
   };
 
   if (i >= 0) {
@@ -361,7 +403,7 @@ export function searchCard(drug, T) {
     }
     return {
       kind: r.priceState === 'priced' ? 'priced' : 'stopped',
-      text: stateLabel(r, r.pricedBefore),
+      text: stateLabel(r, wirePrior(r)),
       upcoming: upcomingOf(i + 1),
       rawPrice: r.priceState === 'priced' ? r.rawPrice : null,
     };
@@ -605,8 +647,19 @@ const EVENT_TYPES = new Set(['initial', 'unknown', 'unchanged', 'terminated', 's
   'increase', 'decrease', 'relisted', 'first_priced']);
 export const UPCOMING_META_FIELDS = ['chName', 'enName', 'ingredient', 'strength',
   'strengthUnit', 'dosageForm', 'atcCode', 'manufacturer'];
-const UPCOMING_NULLABLE = ['endDate', 'price', 'previousPrice', 'pricedBefore',
+// pricedBefore 不在此列：前價不唯一時合法省略（另以 validPricedBefore 驗）
+const UPCOMING_NULLABLE = ['endDate', 'price', 'previousPrice',
   'previousState', 'absoluteChange', 'percentChange'];
+
+/** pricedBefore 三態（spec-upcoming §5.5.1）：數值／null，或省略鍵＋pricedBeforeAmbiguous: true；與 Python 同規則。 */
+function validPricedBefore(it) {
+  if ('pricedBeforeAmbiguous' in it) {
+    return it.pricedBeforeAmbiguous === true && !('pricedBefore' in it) && it.everPriced === true;
+  }
+  if (!('pricedBefore' in it)) return false;
+  if (it.pricedBefore !== null && typeof it.pricedBefore !== 'number') return false;
+  return it.everPriced === (it.pricedBefore !== null);
+}
 
 /**
  * 真實日曆日（不只是外形）。`ISO_DATE` 只驗 `YYYY-MM-DD` 的樣子，`2027-02-30`
@@ -636,8 +689,8 @@ function validUpcomingRow(it, buildDate) {
   // 狀態與價格一致性：priced ⟺ price 為正數
   if (it.priceState === 'priced' ? !(typeof it.price === 'number' && it.price > 0)
     : it.price !== null) return false;
-  if (it.everPriced !== (it.pricedBefore !== null)) return false;
-  for (const k of ['previousPrice', 'pricedBefore', 'absoluteChange', 'percentChange']) {
+  if (!validPricedBefore(it)) return false;
+  for (const k of ['previousPrice', 'absoluteChange', 'percentChange']) {
     if (it[k] !== null && typeof it[k] !== 'number') return false;
   }
   if (!isCalendarDate(it.effectiveDate) || it.effectiveDate <= buildDate) return false;
@@ -688,7 +741,7 @@ export function upcomingPendingCount(items, T) {
 export function upcomingDecision(it) {
   const d = it.effectiveDate;
   const Y = it.rawPrice;
-  const before = fmtMoney(it.pricedBefore);          // X：停止前最後一個有價金額
+  const prior = wirePrior(it);                       // X：停止前最後一個有價金額（三態）
   const prev = fmtMoney(it.previousPrice);           // X：priced 列的前一筆有價金額
   const pct = it.percentChange === null ? '' : `（${fmtPct(it.percentChange)}`;
 
@@ -707,22 +760,23 @@ export function upcomingDecision(it) {
       return { rule: 4, label: '健保支付價 0 元', sub: `${d} 起（此前無有價紀錄）`, type: 'first_priced' };
     }
     if (it.previousState === 'terminated') {
-      return { rule: 5, label: '終止支付續期', sub: `${d} 起仍為 0 元；終止前 ${before} 元`, type: 'terminated' };
+      return { rule: 5, label: '終止支付續期', sub: `${d} 起仍為 0 元；${priorPhrase(prior, 'terminated')}`, type: 'terminated' };
     }
-    return { rule: 6, label: '終止支付', sub: `${d} 起；終止前 ${before} 元`, type: 'terminated' };
+    return { rule: 6, label: '終止支付', sub: `${d} 起；${priorPhrase(prior, 'terminated')}`, type: 'terminated' };
   }
   if (it.priceState === 'suspended') {
     if (!it.everPriced) {
       return { rule: 7, label: '暫停支付', sub: `${d} 起（此前無有價紀錄，來源標示「${Y}」）`, type: 'first_priced' };
     }
     if (it.previousState === 'suspended') {
-      return { rule: 8, label: '暫停支付續期', sub: `${d} 起仍為暫停；暫停前 ${before} 元`, type: 'suspended' };
+      return { rule: 8, label: '暫停支付續期', sub: `${d} 起仍為暫停；${priorPhrase(prior, 'suspended')}`, type: 'suspended' };
     }
-    return { rule: 9, label: '暫停支付', sub: `${d} 起；暫停前 ${before} 元（來源標示「${Y}」）`, type: 'suspended' };
+    return { rule: 9, label: '暫停支付', sub: `${d} 起；${priorPhrase(prior, 'suspended')}（來源標示「${Y}」）`, type: 'suspended' };
   }
   if (it.priceState === 'priced') {
     if (!it.everPriced) return { rule: 10, label: '首次有價', sub: `${d} 起 ${Y} 元`, type: 'first_priced' };
-    if (it.previousState === 'terminated' || it.previousState === 'suspended') {
+    if ((it.previousState === 'terminated' || it.previousState === 'suspended') && prior !== PRIOR_AMBIGUOUS) {
+      // 前價不唯一時 ETL 已將事件判為 unknown（序 1）；此處僅防禦，落到序 14「無法判定」
       // §4.2／U4：relisted 的差額與百分比在 record 上已有值，**兩者都必須呈現**，
       // 不得只顯示新價或只顯示百分比
       const parts = [];
@@ -732,7 +786,7 @@ export function upcomingDecision(it) {
       return {
         rule: 11,
         label: '恢復支付',
-        sub: `${d} 起 ${before} → ${Y} 元（${parts.join('，')}）`,
+        sub: `${d} 起 ${fmtMoney(prior)} → ${Y} 元（${parts.join('，')}）`,
         type: 'relisted',
       };
     }
@@ -875,9 +929,13 @@ export function describeUpcomingFilters(p) {
   return parts.join('，');
 }
 
-/** 變動前支付價（§4.2）：停止狀態取該列之前最後一個有價金額，有價列取前一筆有價金額。 */
-function priorAmount(it) {
-  return it.priceState === 'priced' ? it.previousPrice : it.pricedBefore;
+/**
+ * 變動前支付價（§4.2）：停止狀態取該列之前最後一個有價金額，有價列取前一筆有價金額。
+ * 前價不唯一時輸出文字：留空會被讀成「此前無有價紀錄」（spec.md §5.1）。
+ */
+function priorAmountText(it) {
+  const prior = it.priceState === 'priced' ? it.previousPrice : wirePrior(it);
+  return prior === PRIOR_AMBIGUOUS ? '不唯一（來源紀錄衝突）' : fmtAmount(prior);
 }
 
 /**
@@ -908,7 +966,7 @@ export function upcomingCSV(rows, { buildDate, params, today, staleNote = '' }) 
       it.atcCode,
       it.manufacturer,
       dec.label,
-      fmtAmount(priorAmount(it)),
+      priorAmountText(it),
       fmtAmount(it.price),
       fmtAmount(it.absoluteChange),
       fmtAmount(it.percentChange),
@@ -992,14 +1050,14 @@ export function dayState(records, day, priors = priorPrices(records)) {
       // 該列之前從未有價：不得出現「終止」字樣（spec.md §5.3 首列 0 元例外）
       return prior === null
         ? { rule: 7, kind: 'unpriced_zero', tooltip: '健保支付價 0 元（此前無有價紀錄）', record: r }
-        : { rule: 8, kind: 'terminated', tooltip: `已終止支付（終止前 ${fmtMoney(prior)} 元）`, record: r };
+        : { rule: 8, kind: 'terminated', tooltip: `已終止支付（${priorPhrase(prior, 'terminated')}）`, record: r };
     case 'suspended':
       return {
         rule: 9,
         kind: 'suspended',
         tooltip: prior === null
           ? `暫停支付（來源標示「${r.rawPrice}」）`
-          : `暫停支付（來源標示「${r.rawPrice}」，暫停前 ${fmtMoney(prior)} 元）`,
+          : `暫停支付（來源標示「${r.rawPrice}」，${priorPhrase(prior, 'suspended')}）`,
         record: r,
       };
     default:

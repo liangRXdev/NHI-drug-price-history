@@ -361,3 +361,35 @@ test('T1 反向哨兵：合法但晚於 buildDate 的日期仍須通過', () => 
   const p = payload({}, (x) => { x.items[0].effectiveDate = '2028-02-29'; });
   assert.deepEqual(validateUpcoming(p, META), { ok: true });
 });
+
+// ── pricedBefore 三態（spec-upcoming §5.5.1）：與 Python validator 同一組規則 ──
+const AMB_ROW = {
+  code: 'P000000201', effectiveDate: '2023-01-01', endDate: null, eventType: 'unchanged',
+  priceState: 'terminated', price: null, rawPrice: '0.00', previousPrice: null,
+  pricedBeforeAmbiguous: true, previousState: 'terminated', absoluteChange: null, percentChange: null,
+  crossesStop: false, everPriced: true, flags: ['conflict'],
+  chName: null, enName: null, ingredient: null, strength: null, strengthUnit: null,
+  dosageForm: null, atcCode: null, manufacturer: null,
+};
+const ambPayload = (row) => ({
+  dataVersion: 'sha256:x', generatorVersion: UPCOMING_GENERATOR_VERSION, buildDate: '2022-06-01',
+  count: 1, codeCount: 1, items: [row],
+});
+
+test('validateUpcoming 接受前價不唯一（省略 pricedBefore＋旗標）', () => {
+  assert.deepEqual(validateUpcoming(ambPayload(AMB_ROW), { dataVersion: 'sha256:x' }), { ok: true });
+});
+
+for (const [name, mutate] of [
+  ['旗標與數值並存', (r) => { r.pricedBefore = 9; }],
+  ['旗標與 null 並存', (r) => { r.pricedBefore = null; }],
+  ['旗標為 false', (r) => { r.pricedBeforeAmbiguous = false; }],
+  ['不唯一卻 everPriced=false', (r) => { r.everPriced = false; }],
+  ['旗標與 pricedBefore 皆無', (r) => { delete r.pricedBeforeAmbiguous; }],
+]) {
+  test(`validateUpcoming 拒絕不合法的三態編碼：${name}`, () => {
+    const row = structuredClone(AMB_ROW);
+    mutate(row);
+    assert.deepEqual(validateUpcoming(ambPayload(row), { dataVersion: 'sha256:x' }), { ok: false, reason: 'invalid' });
+  });
+}

@@ -1,4 +1,5 @@
 // 前端驗收：plan.md §5 C1、C3–C8、E3–E5（DOM、viewport、route mock）。
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { buildData, mockSite, statusDaysAgo } from './mock.mjs';
 
@@ -501,4 +502,28 @@ test('§5.3 一般終止（AC48867100）仍以終止區塊與圖例呈現', asyn
   await expect(detail(page).locator('svg.chart [data-band="terminated"]')).toHaveCount(1);
   await expect(detail(page).locator('[data-legend="terminated"]')).toHaveText(/終止支付/);
   await expect(detail(page).locator('[data-legend="unpriced_zero"]')).toHaveCount(0);
+});
+
+// ── pricedBefore 三態（spec.md §5.1）：衝突組 → 停用 → 終止，畫面不得取任一候選價 ──
+test('前價不唯一：搜尋卡、詳細頁摘要與歷史表顯示「終止前支付價不唯一」，不落入首列 0 元例外', async ({ page }) => {
+  const pb = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_priced_before_ambiguous.json', import.meta.url), 'utf8'));
+  const data = buildData();
+  const code = 'P000000201';
+  data.shards.P000 = { shardVersion: 'sha256:e2e-P000', drugs: { [code]: pb.shards[code] } };
+  data.meta.shards.files = [...data.meta.shards.files, 'P000'].sort();
+  data.meta.shards.versions.P000 = 'sha256:e2e-P000';
+  data.index.drugs.push({ ...pb.index['2022-06-01'][code], chName: '前價不唯一測試藥' });
+  await mockSite(page, { today: '2023-06-01', data });
+  await page.goto('/');
+
+  await search(page, code);
+  const card = page.locator('.result').first();
+  await expect(card).toContainText('已終止支付（終止前支付價不唯一（來源紀錄衝突））');
+  await expect(card).not.toContainText('需更新');
+
+  await card.click();
+  await expect(detail(page).locator('.metric.key')).toContainText('已終止支付（終止前支付價不唯一（來源紀錄衝突））');
+  const text = await detail(page).textContent();
+  expect(text).not.toContain('此前無有價紀錄');
+  expect(text).not.toMatch(/終止前 (9|12)\.00 元|暫停前 (9|12)\.00 元/);   // 不得取任一候選價
 });
