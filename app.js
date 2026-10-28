@@ -1387,8 +1387,8 @@ function compareChartHTML(m) {
       const gy = y(v);
       const cls = `cmp-line s${s.slot + 1}${seg.upcoming ? ' upcoming' : ''}`;
       const val = state.compareMode === 'rel'
-        ? ` data-index="${E.relativeIndex(seg.rawPrice, s.baseline.rawPrice)}"`
-        : ` data-price="${seg.rawPrice}"`;
+        ? ` data-index="${esc(E.relativeIndex(seg.rawPrice, s.baseline.rawPrice))}"`
+        : ` data-price="${esc(seg.rawPrice)}"`;
       // 相鄰且價格不同才連垂直線；空窗與非有價區間之後 prev 已清空
       if (prev && prev.nextX === gx0 && prev.y !== gy) {
         parts.push(`<line class="${cls}" x1="${f(gx0)}" x2="${f(gx0)}" y1="${f(prev.y)}" y2="${f(gy)}"/>`);
