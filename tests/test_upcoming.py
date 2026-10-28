@@ -386,3 +386,33 @@ def test_validator_rejects_illegal_build_date(value):
     payload["items"], payload["count"], payload["codeCount"] = [], 0, 0
     payload["buildDate"] = value
     assert any("buildDate" in m for m in history.validate_upcoming(payload))
+
+
+# ── pricedBefore 三態（spec-upcoming §5.5.1、spec.md §5.1）─────────────
+def ambiguous_payload():
+    rows = [make_row(code="P000000201", price=p, frm=f, to=t) for p, f, t in (
+        ("10.00", "1090101", "1091231"), ("12.00", "1100101", "1101231"),
+        ("9.00", "1100101", "1101231"), ("0.00", "1110101", "9991231"))]
+    from build_price_history import upcoming_payload
+    _, _, items, _ = build_outputs(rows, date(2020, 6, 1))
+    return upcoming_payload(items, "sha256:x", date(2020, 6, 1))
+
+
+def test_validator_accepts_ambiguous_priced_before():
+    payload = ambiguous_payload()
+    assert any(it.get("pricedBeforeAmbiguous") for it in payload["items"])
+    assert history.validate_upcoming(payload) == []
+
+
+@pytest.mark.parametrize("mutate,fragment", [
+    (lambda it: it.update(pricedBefore=9.0), "pricedBeforeAmbiguous"),        # 旗標與數值並存
+    (lambda it: it.update(pricedBefore=None), "pricedBeforeAmbiguous"),       # 旗標與 null 並存
+    (lambda it: it.update(pricedBeforeAmbiguous=False), "pricedBeforeAmbiguous"),
+    (lambda it: it.update(everPriced=False), "everPriced"),
+    (lambda it: it.pop("pricedBeforeAmbiguous"), "pricedBefore"),             # 兩者皆無
+], ids=["with_number", "with_null", "false", "never_priced", "neither"])
+def test_validator_rejects_malformed_ambiguous_priced_before(mutate, fragment):
+    payload = ambiguous_payload()
+    mutate(next(it for it in payload["items"] if it.get("pricedBeforeAmbiguous")))
+    errors = history.validate_upcoming(payload)
+    assert errors and any(fragment in e for e in errors), errors

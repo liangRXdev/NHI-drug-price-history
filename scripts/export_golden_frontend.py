@@ -27,6 +27,9 @@ OUT = ROOT / "tests" / "fixtures" / f"golden_frontend_{SNAPSHOT_DATE}.json"
 # 這裡只把來源列建成前端格式（shard＋各 index 日的 index entry）
 SYNTH_IN = ROOT / "tests" / "fixtures" / "golden_same_price_overlap.json"
 SYNTH_OUT = ROOT / "tests" / "fixtures" / "golden_frontend_same_price_overlap.json"
+# pricedBefore 三態跨語言案例（spec §5.1）：另含各 index 日的 upcoming payload
+PB_IN = ROOT / "tests" / "fixtures" / "golden_priced_before_ambiguous.json"
+PB_OUT = ROOT / "tests" / "fixtures" / "golden_frontend_priced_before_ambiguous.json"
 
 
 def render():
@@ -42,28 +45,38 @@ def render():
     })
 
 
-def synth_rows():
+def synth_rows(path=SYNTH_IN):
     from tests.helpers import make_row   # noqa: PLC0415（測試 helper，只在合成案例使用）
-    spec = json.loads(SYNTH_IN.read_text(encoding="utf-8"))
+    spec = json.loads(path.read_text(encoding="utf-8"))
     rows = [make_row(code=code, price=r["price"], frm=r["from"], to=r["to"])
             for code, case in spec["codes"].items() for r in case["rows"]]
     return spec, rows
 
 
-def render_synthetic():
-    spec, rows = synth_rows()
-    shards, index = {}, {}
+def render_synthetic(path=SYNTH_IN, with_upcoming=False):
+    spec, rows = synth_rows(path)
+    shards, index, upcoming = {}, {}, {}
     for d in spec["indexDates"]:
-        s, drugs, _, _ = build_outputs(rows, date.fromisoformat(d))
+        s, drugs, items, _ = build_outputs(rows, date.fromisoformat(d))
         shards = {code: entry for shard in s.values() for code, entry in shard.items()}
         index[d] = {x["code"]: x for x in drugs}
-    return dumps({"shards": shards, "index": index})
+        upcoming[d] = upcoming_payload(items, "sha256:golden", date.fromisoformat(d))
+    out = {"shards": shards, "index": index}
+    if with_upcoming:
+        out["upcoming"] = upcoming
+    return dumps(out)
+
+
+def render_priced_before():
+    return render_synthetic(PB_IN, with_upcoming=True)
 
 
 def main():
     OUT.write_bytes(render())
     SYNTH_OUT.write_bytes(render_synthetic())
-    print(f"✓ → {OUT.relative_to(ROOT)}、{SYNTH_OUT.relative_to(ROOT)}")
+    PB_OUT.write_bytes(render_priced_before())
+    for path in (OUT, SYNTH_OUT, PB_OUT):
+        print(f"✓ → {path.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
