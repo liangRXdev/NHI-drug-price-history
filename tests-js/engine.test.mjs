@@ -503,3 +503,16 @@ test('R4 同起日、不同描述：依 recordIndex 對應選中的那一列（�
   assert.equal(selectMeta(entry, '2021-06-01').chName, '乙名');      // 只剩 record 1 有效
   assert.equal(selectMeta(entry, '2023-01-01').chName, '甲名');
 });
+
+// ── Low：刻度標籤小數位依 step 決定（相對模式原本一律 toFixed(0)，窄範圍時標籤重複）──
+test('tickLabels 依刻度間距決定小數位，標籤不重複', async () => {
+  const E = await import('../engine.js');
+  assert.equal(typeof E.tickLabels, 'function');
+  const narrow = E.niceTicks(99.6, 100.4, 5);
+  const labels = E.tickLabels(narrow);
+  assert.deepEqual(labels, ['99.6', '99.8', '100.0', '100.2', '100.4']);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.deepEqual(E.tickLabels(E.niceTicks(40, 140, 5)), ['40', '60', '80', '100', '120', '140']);
+  assert.deepEqual(E.tickLabels([97.5, 100, 102.5]), ['97.5', '100.0', '102.5']);
+  assert.deepEqual(E.tickLabels([100]), ['100']);
+});

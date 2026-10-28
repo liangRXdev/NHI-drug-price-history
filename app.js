@@ -1344,10 +1344,13 @@ function compareChartHTML(m) {
 
   // 格線與 Y 軸
   if (m.hasValues) {
-    for (const v of E.niceTicks(m.yMin, m.yMax, 5)) {
+    const ticks = E.niceTicks(m.yMin, m.yMax, 5);
+    // 相對模式依刻度間距決定小數位：窄範圍（如 99.6–100.4）一律取整會出現重複標籤
+    const labels = state.compareMode === 'rel' ? E.tickLabels(ticks) : ticks.map(E.fmtMoney);
+    ticks.forEach((v, i) => {
       parts.push(`<g class="grid"><line x1="${CM.l}" x2="${W - CM.r}" y1="${f(y(v))}" y2="${f(y(v))}"/></g>
-        <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(state.compareMode === 'rel' ? v.toFixed(0) : E.fmtMoney(v))}</text>`);
-    }
+        <text x="${CM.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${esc(labels[i])}</text>`);
+    });
     // 相對模式的 Y 軸不得標成「價格」或任何貨幣單位（§4.1）
     parts.push(`<text class="y-unit" x="${CM.l - 6}" y="${CM.t - 5}" text-anchor="end">${state.compareMode === 'rel' ? '指數（各自基準＝100）' : '元'}</text>`);
   }

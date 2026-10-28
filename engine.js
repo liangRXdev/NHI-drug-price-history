@@ -589,6 +589,12 @@ export function niceTicks(min, max, n = 5) {
   return ticks;
 }
 
+/** 刻度標籤：小數位取刻度中最多者（上限 4），使同一軸標籤位數一致且不因捨入而重複。 */
+export function tickLabels(ticks) {
+  const decimals = Math.min(4, Math.max(0, ...ticks.map((v) => (String(v).split('.')[1] || '').length)));
+  return ticks.map((v) => v.toFixed(decimals));
+}
+
 // ── 預告中心（spec-upcoming.md）──────────────────────────────────
 // 前端內建的期望生成規則版本。dataVersion 只依來源內容，同一份來源在規則變更
 // 前後的 dataVersion 相同，少了這個欄位就分不出舊規則產物（§3.3.2）。
