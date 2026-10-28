@@ -258,7 +258,20 @@ CSV 共 20 欄。至少保留：
 ```
 
 - `window` 每筆與 §5.2 的 record 同構（含 `rawPrice`、`eventType`、`previousPrice`），另加 `pricedBefore`；搜尋卡的「暫停支付（`-`）」、「終止前 X 元」、「調整為 X 元（±Y%）」皆由此取得。
-- `pricedBefore`（僅 index window）：該列**之前**最後一個 `priced` 金額，無則 null；只看排序在前的列，不受未來恢復支付影響。搜尋卡的「終止前／暫停前 X 元」取此值，並以它是否為 null 判斷首列 0 元例外（§5.3）。理由：「終止→終止續期」的 `eventType` 為 `unchanged`、`previousPrice` 為 null（§5.4 序 3），搜尋卡只有 window 無法回看歷史（Phase 2 實作時發現，2026-09-12 實測 45 個代號受影響）。詳細頁有完整 history，不需此欄。
+- `pricedBefore`（僅 index window；預告清單同義，見 spec-upcoming §3.1）：該列**之前**最後一個 `priced` 金額，為**三態**（2026-10 裁決）：
+
+  | 狀態 | 條件 | 線上編碼 |
+  |---|---|---|
+  | 有唯一前價 | 之前最後一個 `priced` 金額唯一 | `"pricedBefore": <number>` |
+  | 此前無有價紀錄 | 之前從未有 `priced` | `"pricedBefore": null` |
+  | **前價不唯一** | 之前最後一個 `priced` 落在含 `priced` 候選的衝突組（§6.3）內，且其後尚未出現單一有價列 | **省略 `pricedBefore` 鍵**，改帶 `"pricedBeforeAmbiguous": true` |
+
+  - 「之前」只看排序在前、且**不屬於本列所在衝突組**的列：衝突組成員彼此同 (from, to)，組內排序只是 §6.2 的 deterministic 次鍵，不代表時間先後，因此組內每一列的 `pricedBefore` 都取組前的狀態
+  - 衝突組內全為非 `priced`（如 0 元／暫停）時，不影響其後的前價
+  - 「前價不唯一」**不是**「此前無有價紀錄」：不得觸發 §5.3 首列 0 元例外；`everPriced = true`
+  - 顯示文案：「終止前支付價不唯一（來源紀錄衝突）」／「暫停前支付價不唯一（來源紀錄衝突）」，取代「終止前 X 元」／「暫停前 X 元」；**不得**取任一候選價
+  - 線上編碼取「省略鍵＋旗標」而非 `null`＋旗標：舊版前端遇 `null` 會誤用 §5.3 首列 0 元例外；遇省略鍵則走既有的保守路徑（搜尋卡「需更新，請開啟詳細頁」、預告清單整份判損毀）。旗標只在不唯一時出現，既有資料不受影響
+  - 原定義：只看排序在前的列，不受未來恢復支付影響。搜尋卡的「終止前／暫停前 X 元」取此值，並以它是否為 null 判斷首列 0 元例外（§5.3）。理由：「終止→終止續期」的 `eventType` 為 `unchanged`、`previousPrice` 為 null（§5.4 序 3），搜尋卡只有 window 無法回看歷史（Phase 2 實作時發現，2026-09-12 實測 45 個代號受影響）。詳細頁有完整 history，不需此欄。
 - `flags`（代號層）：`gap`、`overlap`、`conflict`、`invalid_records`、`question_mark`、`inconsistent_metadata`；供搜尋卡顯示品質提示。
 - 描述欄位依 §6.6 規則以 build 日選列。
 - `historyCount`、`priceChangeCount`、`lastPriceChangeDate` 以 **build 日為參考日期**（§5.5）。
@@ -369,7 +382,7 @@ build 日後、下次 build 前跨過預告生效日時，搜尋卡的 `priceCha
 
 `suspended` 語意為臨床藥師判斷而非官方文件定義，故 UI 必須併列原始標記，讓使用者可自行查核。
 
-**首列 0 元例外**（2026-09-11 定案）：`terminated` 區間若**之前從未有 `priced` 紀錄**（實測 3,387 個代號首列即 0 元，例 `A020296321`），`priceState` 仍為 `terminated`，但 UI 標籤改為「**健保支付價 0 元（此前無有價紀錄）**」，不得出現「終止」字樣。理由：只陳述資料可見的事實，不推論是終止或尚未核價。此規則適用於歷史表（支付價欄與事件欄）、圖表區塊與圖例（獨立區塊樣式）、搜尋卡、摘要卡、預告標籤與頁尾聲明。
+**首列 0 元例外**（2026-09-11 定案）：`terminated` 區間若**之前從未有 `priced` 紀錄**（`pricedBefore` 三態中的「此前無有價紀錄」；「前價不唯一」不適用，§5.1）（實測 3,387 個代號首列即 0 元，例 `A020296321`），`priceState` 仍為 `terminated`，但 UI 標籤改為「**健保支付價 0 元（此前無有價紀錄）**」，不得出現「終止」字樣。理由：只陳述資料可見的事實，不推論是終止或尚未核價。此規則適用於歷史表（支付價欄與事件欄）、圖表區塊與圖例（獨立區塊樣式）、搜尋卡、摘要卡、預告標籤與頁尾聲明。
 
 ### 5.4 Derived event
 
@@ -892,7 +905,12 @@ GitHub Pages（main 分支根目錄）
 - `status.json` 每次成功檢查都 commit（`lastCheckedAt`、`lastCheckResult`、`sourceModifiedAt`）
   - 讓前端能區分「官方沒更新」與「build 壞了」（§8.6）
   - 維持 repo 活動，避免 GitHub 在 60 天無活動後自動停用排程 workflow
-- workflow 失敗通知：沿用 GitHub 內建失敗通知信，不另建通道
+- workflow 失敗通知（2026-10 裁決，取代原「沿用 GitHub 內建失敗通知信，不另建通道」）：
+  - 單次失敗：GitHub 內建失敗通知信
+  - **連續失敗 ≥ 2 次**：`report-failure` job 自動開 issue（label `bug`、標題前綴 `[build-data] 排程建置連續失敗`，內文為失敗 run 表格＋排查順序）；已有 open issue 則留言更新次數，不重複開
+  - 下次建置成功 → 自動關閉該 issue
+  - 「連續」以本 workflow 在 main 上已完成的 run 計算；`cancelled`／`skipped` 既不計入也不中斷
+  - `issues: write` 只授予 `report-failure` job，build job 不得取得
 - 待驗證：GitHub Actions runner 能否連線 `data.gov.tw`（`info.nhi.gov.tw` 已由舊專案證實可連）
 
 ### Concurrency and publishing
@@ -907,6 +925,8 @@ GitHub Pages（main 分支根目錄）
 ### Schedule
 
 官方資料月更，但建議 workflow **每週檢查一次**；資料無變化時跳過資料檔 commit，**但仍 commit `status.json`**。
+
+排程（2026-10 裁決）：一律落在台灣白天、避開整點——主排程台灣週一 09:17、備援台灣週二 10:17。備援排程在主排程成功後**照跑**（只多一筆「資料無變動」的 `status.json` commit），不做「當週已成功則跳過」：多一次活動有利於避免 GitHub 在 60 天無活動後停用排程，也免去跨 run 判定的複雜度。
 
 理由：
 
