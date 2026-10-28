@@ -839,9 +839,15 @@ export const UPCOMING_CSV_HEADER = ['生效日', '代號', '中文品名', '英�
 
 const CRLF = '\r\n';
 
-/** RFC 4180：含逗號、引號、換行者加引號，內部引號重複一次。其餘逐字輸出。 */
+// 公式注入（OWASP CSV Injection）：= + - @ Tab CR 開頭的儲存格會被試算表當公式執行。
+// 純數值（含正負號、百分比）與單一 "-" 暫停標記不是公式，照原樣輸出，以免差額欄變成文字
+const FORMULA_START = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)%?$|^-$/;
+
+/** RFC 4180：含逗號、引號、換行者加引號，內部引號重複一次；公式開頭者前置 '。其餘逐字輸出。 */
 export function csvField(value) {
-  const s = value === null || value === undefined ? '' : String(value);
+  let s = value === null || value === undefined ? '' : String(value);
+  if (FORMULA_START.test(s) && !PLAIN_NUMBER.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
