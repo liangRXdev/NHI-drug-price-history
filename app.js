@@ -1622,10 +1622,7 @@ function eventRowHTML(row, name, T) {
       <td>${esc(name || '')}</td><td>${esc(r.rawPrice)}</td><td>—</td><td>—</td>
       <td>日期異常（${esc(E.INVALID_TEXT[r.error] || r.error)}）</td></tr>`;
   }
-  const notes = [];
-  if (r.from > T) notes.push('預告');
-  if (r.crossesStop) notes.push('跨越停止期間');
-  if ((r.flags || []).includes('gap_before')) notes.push('前有空窗');
+  const note = E.eventNote(r, T);
   return `<tr data-row="${id}" data-slot="${row.slot + 1}"${r.from > T ? ' class="upcoming-row-tr"' : ''}>
     <td class="mono">${esc(r.from)}</td><td class="mono">${esc(r.to ?? '—')}</td>
     <td><span class="cmp-swatch" aria-hidden="true"></span><span class="mono">${esc(row.code)}</span></td>
@@ -1633,7 +1630,7 @@ function eventRowHTML(row, name, T) {
     <td>${esc(E.stateLabel(r, row.prior, 'cell'))}</td>
     <td class="num">${esc(r.absoluteChange === null ? '—' : E.fmtSigned(E.fmtMoney(r.absoluteChange)))}</td>
     <td class="num">${esc(r.percentChange === null ? '—' : E.fmtPct(r.percentChange))}</td>
-    <td>${esc(E.eventText(r, row.prior))}${notes.length ? `（${esc(notes.join('、'))}）` : ''}</td></tr>`;
+    <td>${esc(E.eventText(r, row.prior))}${note ? `（${esc(note)}）` : ''}</td></tr>`;
 }
 
 function exportCompareCSV() {

@@ -1260,7 +1260,8 @@ function fmtCsvNumber(x) {
   return Number(two) === x ? two : String(x);
 }
 
-function eventNote(r, today) {
+/** 事件列備註（預告／跨越停止期間／前有空窗／重疊／衝突）；比較頁事件表與 CSV 共用，避免畫面與匯出不一致。 */
+export function eventNote(r, today) {
   const notes = [];
   if (r.from > today) notes.push('預告');
   if (r.crossesStop) notes.push('跨越停止期間');
