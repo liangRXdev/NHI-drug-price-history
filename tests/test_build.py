@@ -781,3 +781,87 @@ def test_oversized_index_fails_build_and_writes_nothing(tmp_path):
               checked_at="2026-09-18T02:00:00+08:00")
     assert any("drug_index.json" in m for m in e.value.args[0])
     assert tree_hash(tmp_path) == before
+
+
+# ── shard 路由守門（spec-startup §5.6、S14）────────────────────
+# 詳情頁的「查無此代號」改由 shard 判定後，「前端依 shard map 找得到每個代號」成為前提。
+ROUTING = json.loads((ROOT / "tests" / "fixtures" / "shard_routing_cases.json").read_text(encoding="utf-8"))
+
+
+def _tamper_extra_index(shards, index):
+    index.append({**index[0], "code": "ZZ99999999"})
+
+
+def _tamper_extra_shard(shards, index):
+    p = sorted(shards)[0]
+    shards[p]["ZZ99999999"] = next(iter(shards[p].values()))
+
+
+def _tamper_wrong_shard(shards, index):
+    src, dst = sorted(shards)[:2]
+    code = sorted(shards[src])[0]
+    shards[dst][code] = shards[src].pop(code)
+
+
+def _tamper_duplicate(shards, index):
+    src, dst = sorted(shards)[:2]
+    code = sorted(shards[src])[0]
+    shards[dst][code] = shards[src][code]
+
+
+TAMPERS = {
+    "index_extra": (_tamper_extra_index, "index 有而任何 shard 都沒有"),
+    "shard_extra": (_tamper_extra_shard, "shard 有而 index 沒有"),
+    "wrong_shard": (_tamper_wrong_shard, "代號不在最長前綴所選的片"),
+    "duplicate": (_tamper_duplicate, "同一代號存在於多片"),
+}
+
+
+@pytest.mark.parametrize("allow_anomaly", [False, True])
+@pytest.mark.parametrize("kind", sorted(TAMPERS))
+def test_s14_routing_guard_fails_publish_and_writes_nothing(tmp_path, monkeypatch, kind, allow_anomaly):
+    build(tmp_path)                                   # 預先存在且有內容的 data/
+    before = tree_hash(tmp_path)
+    assert (tmp_path / "status.json").exists() and any((tmp_path / "history").iterdir())
+    tamper, label = TAMPERS[kind]
+    original = bph.build_outputs
+
+    def tampered(rows, build_date):
+        shards, index, upcoming, stats = original(rows, build_date)
+        tamper(shards, index)
+        return shards, index, upcoming, stats
+
+    monkeypatch.setattr(bph, "build_outputs", tampered)
+    with pytest.raises(BuildError) as e:
+        build(tmp_path, checked_at="2026-09-18T02:00:00+08:00", allow_anomaly=allow_anomaly)
+    # 錨在這條守門自己的訊息上：別的 guard 先失敗也會 raise，那樣不算通過
+    assert [m for m in e.value.args[0] if "shard 路由不一致" in m and label in m], e.value.args[0]
+    assert tree_hash(tmp_path) == before
+
+
+def test_s14_untampered_build_has_no_routing_errors(tmp_path):
+    rows = nhi.parse_csv(SNAPSHOT.read_bytes())
+    shards, index, _, _ = bph.build_outputs(rows, D)
+    assert bph.routing_errors(shards, index) == []
+
+
+@pytest.mark.parametrize("case", ROUTING["cases"], ids=lambda c: c["code"])
+def test_s14_longest_prefix_matches_independent_expectation(case):
+    assert bph.longest_prefix(case["code"], ROUTING["files"]) == case["expect"]
+    # 順序不得影響結果：取第一個匹配前綴的實作在反序時會答錯
+    assert bph.longest_prefix(case["code"], ROUTING["files"][::-1]) == case["expect"]
+
+
+@pytest.mark.parametrize("placed,fails", [
+    ({"AC4": ["AC48000100"], "AC49": ["AC49000100"], "B0": [], "B0123": []}, False),
+    ({"AC4": ["AC48000100", "AC49000100"], "AC49": [], "B0": [], "B0123": []}, True),   # 該去 AC49
+    ({"AC4": [], "AC49": ["AC49000100"], "B0": ["B012345678"], "B0123": []}, True),     # 該去 B0123
+    ({"AC4": [], "AC49": [], "B0": ["B012999999"], "B0123": ["B012345678"]}, False),
+])
+def test_s14_routing_guard_honours_nested_prefixes(placed, fails):
+    shards = {p: {c: {} for c in codes} for p, codes in placed.items()}
+    index = [{"code": c} for codes in placed.values() for c in codes]
+    errors = bph.routing_errors(shards, index)
+    assert bool(errors) == fails
+    if fails:
+        assert all("代號不在最長前綴所選的片" in m for m in errors)
