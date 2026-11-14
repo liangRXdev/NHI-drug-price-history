@@ -1,0 +1,13 @@
+{
+  "_comment": "spec-startup §5.6／S14：含包含關係、長度不同的前綴。Python 的 longest_prefix 與 JS 的 shardPrefix 各自對這份獨立預期值。真實資料全為四碼，寫死四碼或取第一個匹配前綴的實作在這裡會失敗。",
+  "files": ["AC4", "AC49", "B0", "B0123"],
+  "cases": [
+    { "code": "AC49000100", "expect": "AC49" },
+    { "code": "AC48000100", "expect": "AC4" },
+    { "code": "AC4", "expect": "AC4" },
+    { "code": "B012345678", "expect": "B0123" },
+    { "code": "B012999999", "expect": "B0" },
+    { "code": "AC", "expect": null },
+    { "code": "ZZ00000000", "expect": null }
+  ]
+}

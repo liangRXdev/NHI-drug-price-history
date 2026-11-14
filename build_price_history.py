@@ -240,6 +240,43 @@ def check_guards(stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allo
     return errors, warnings, overridden
 
 
+def longest_prefix(code, prefixes):
+    """前端選片規則（engine.js `shardPrefix`）的 Python 端獨立實作：最長符合前綴，無則 None。"""
+    best = None
+    for p in prefixes:
+        if code.startswith(p) and (best is None or len(p) > len(best)):
+            best = p
+    return best
+
+
+def routing_errors(shards, index_drugs, limit=5):
+    """前端依 shard map 找得到每個代號（spec-startup §5.6）。→ 錯誤訊息清單。
+
+    詳情頁的「查無此代號」由 shard 判定，因此必須保證：index 的每個代號恰好存在於一片，
+    且該片正是以**同一份** shard map 做最長前綴比對所選中的那片；每片內的代號都在 index 內。
+    只比代號聯集不夠——放錯片或重複於兩片都不會改變聯集。不屬語意異常，不可人工放行。
+    """
+    prefixes = sorted(shards)
+    located = {}
+    for p in prefixes:
+        for code in shards[p]:
+            located.setdefault(code, []).append(p)
+    index_codes = [d["code"] for d in index_drugs]
+    index_set = set(index_codes)
+    problems = {
+        "index 代號重複": sorted({c for c in index_codes if index_codes.count(c) > 1})
+        if len(index_codes) != len(index_set) else [],
+        "index 有而任何 shard 都沒有": sorted(index_set - set(located)),
+        "shard 有而 index 沒有": sorted(set(located) - index_set),
+        "同一代號存在於多片": sorted(c for c, ps in located.items() if len(ps) > 1),
+        "代號不在最長前綴所選的片": sorted(
+            c for c, ps in located.items()
+            if len(ps) == 1 and longest_prefix(c, prefixes) != ps[0]),
+    }
+    return [f"shard 路由不一致——{label} {len(codes):,} 個（例：{', '.join(codes[:limit])}）"
+            for label, codes in problems.items() if codes]
+
+
 def blank_rate_checks(stats, prev_meta, cfg):
     """描述欄位空白率：整欄空白 → WARNING；比前版已發布 meta 暴增 > N 個百分點 → error。
 
@@ -382,6 +419,7 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
         stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
         upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes,
         index_bytes=files["drug_index.json"])
+    errors += routing_errors(shards, index_drugs)      # 不經 allow_anomaly（spec-startup §5.6）
     warnings += golden_rewrites(shards, fixtures_dir)
     if errors:
         raise BuildError(errors, warnings)
