@@ -104,6 +104,26 @@ for (const [name, mutate] of MAP_CASES) {
   });
 }
 
+// ── §5.3 shard 快取只保存已通過版本比對者 ────────────────────────
+for (const [name, first, text] of [
+  ['版本不符', (d) => ({ json: { ...d.shards.AC48, shardVersion: 'sha256:stale' } }), TEXT.coreMismatch],
+  ['外層結構不合法', () => ({ json: [] }), BAD_SHARD],
+]) {
+  test(`§5.3 ${name}的 shard 不留快取：離開再返回會重新請求，取得正確內容後顯示詳情`, async ({ page }) => {
+    const data = buildData();
+    const site = await gatedSite(page, { data, plan: { 'shard:AC48': [first(data), 'ok'] } });
+    await page.goto(`/?code=${A}`);
+    await expect(detail(page).locator('.alert--error')).toContainText(text);
+    expect(site.count('shard:AC48')).toBe(1);
+    await routeTo(page, `?code=${B}`);
+    await expect(detail(page).locator('.detail-head .code')).toHaveText(B);
+    await routeTo(page, `?code=${A}`);
+    await expect(detail(page).locator('.detail-head .code')).toHaveText(A);
+    await expect(detail(page).locator('table.history tbody tr')).toHaveCount(8);
+    expect(site.count('shard:AC48'), '未通過比對的 shard 不得被沿用').toBe(2);
+  });
+}
+
 // ── S8 正例 ─────────────────────────────────────────────────────
 for (const [name, url] of [['空碼', '/?code='], ['含非法字元', '/?code=AC48-0921'], ['只有空白', '/?code=%20%20']]) {
   for (const metaState of ['ready', 'pending']) {
@@ -272,7 +292,29 @@ test('S9(h) A 查無 → 離開 → 返回 A 時 index 已發布且含 A → 直
   expect(await page.evaluate(() => window.__sawNotFound), '返回過程中出現查無').toBe(false);
 });
 
-// S9(i)：規格寫「shard 第一次缺 key → retry-shard 取得含該 key 的 shard → index 才發布」。
-// 但依 D4.1 第 8 列，index 未發布時缺 key 顯示的是「查無此代號」（沒有 retry-shard 按鈕）；
-// retry-shard 只在 index 已發布後的錯誤畫面出現。此情境在現行規格下無法到達，待規格釐清。
-test.fixme('S9(i) shard 第一次缺 key → retry-shard 成功 → index 才發布 → 詳情維持、零 mutation', async () => {});
+test('S9(i) index 已發布、shard 第一次缺 key → 錯誤 → retry-shard 重新請求取得完整 shard → 完整詳情，離開再返回仍維持', async ({ page }) => {
+  await trackText(page, ['查無']);
+  const data = buildData();
+  const lacking = structuredClone(data.shards.AC48);
+  delete lacking.drugs[A];
+  const site = await gatedSite(page, { data, plan: { 'shard:AC48': [{ json: lacking }, 'ok'] } });
+  await page.goto('/');
+  await waitSearchReady(page);
+  await routeTo(page, `?code=${A}`);
+  await expect(detail(page).locator('.alert--error')).toContainText(MISSING_KEY);
+  expect(site.count('shard:AC48')).toBe(1);
+
+  await detail(page).getByRole('button', { name: '重試' }).click();
+  await expect(detail(page).locator('.detail-head .code')).toHaveText(A);
+  await expect(detail(page).locator('table.history tbody tr')).toHaveCount(8);
+  expect(site.count('shard:AC48'), '重試須重新請求該片').toBe(2);
+
+  await routeTo(page, `?code=${B}`);
+  await expect(detail(page).locator('.detail-head .code')).toHaveText(B);
+  await routeTo(page, `?code=${A}`);
+  await expect(detail(page).locator('.detail-head .code')).toHaveText(A);
+  await expect(detail(page).locator('table.history tbody tr')).toHaveCount(8);
+  await expect(detail(page).locator('.alert--error')).toHaveCount(0);
+  expect(site.count('shard:AC48'), '返回時沿用快取').toBe(2);
+  expect(await everSaid(page, '查無')).toBe(false);
+});

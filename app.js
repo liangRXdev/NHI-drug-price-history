@@ -11,10 +11,17 @@ const dash = (s) => (s === null || s === undefined || s === '' ? '—' : esc(s))
 const APP_TITLE = '健保藥價歷史查詢';
 
 const state = {
-  core: 'loading',            // loading | ready | error | mismatch
-  coreError: null,
-  meta: null,
-  prepared: null,
+  // 兩個獨立的資源狀態（spec-startup D1）。詳情／比較／預告的閘門是 meta，搜尋的閘門是 index。
+  metaState: 'loading',       // loading | ready | error
+  metaError: null,
+  indexState: 'idle',         // idle（尚未開始或已丟棄）| loading | ready（已發布）| error | mismatch
+  indexError: null,
+  indexStarted: false,        // 本次頁面生命週期內 index 是否已啟動（D2：只啟動一次，重試另計）
+  indexSeq: 0,
+  entries: 0,                 // meta ready 後進入視圖的次數：第 1 次的載入工作落定＝T1，第 2 次起＝T2
+  absent: null,               // 目前詳情頁正顯示「資料中不存在」的查無 { code, basis: 'prefix'|'key' }（D4.3）
+  meta: null,                 // I1：一旦 ready，本次頁面生命週期內不再重抓
+  prepared: null,             // I2：只在 index 通過對目前 meta 的版本比對後才寫入（發布）
   byCode: null,
   status: null,
   statusError: null,
@@ -81,10 +88,99 @@ async function fetchJSON(url, timeoutMs) {
 // ── 核心資源（meta、index、status）──────────────────────────────
 // 每次載入帶序號：重試期間舊請求較晚完成時，結果一律丟棄，不得覆蓋較新的狀態（codex R6）。
 // status 為輔助資源：不阻塞查詢；回來後才更新過期警示與來源資訊（codex R7）。
+const asLoadError = (e) => (e instanceof LoadError ? e : new LoadError('invalid', String(e)));
+const isHomeEntry = () => {
+  const p = new URLSearchParams(location.search);
+  return p.get('view') !== 'upcoming' && p.get('codes') === null && p.get('code') === null;
+};
+
+/** 抓 index 原始內容；永不 reject。驗證與發布由 settleIndex() 在 meta ready 後進行。 */
+function fetchIndex() {
+  performance.mark('index-fetch-start');
+  return fetchJSON('data/drug_index.json', TIMEOUT.index).then(
+    (index) => { performance.mark('index-parsed'); return { index }; },
+    (e) => ({ error: asLoadError(e) }),
+  );
+}
+
+/**
+ * index 落定：對目前的 meta 比對版本，通過才發布（I2）。
+ * 只更新搜尋相關狀態、橫幅、比較籃 chip 與 D4.4 窮舉的兩項局部變動；不得 route()、不得重畫目前主體（§5.3）。
+ */
+function settleIndex(r) {
+  let published = false;
+  if (r.error) {
+    state.indexState = 'error';
+    state.indexError = r.error;
+  } else {
+    const v = E.validateIndex(r.index, state.meta);
+    if (v.reason === 'version_mismatch') state.indexState = 'mismatch';
+    else if (!v.ok) {
+      state.indexState = 'error';
+      state.indexError = new LoadError('invalid', 'drug_index.json 內容不合法');
+    } else {
+      state.prepared = E.prepareIndex(r.index.drugs);
+      state.byCode = new Map(r.index.drugs.map((d) => [d.code, d]));
+      state.indexState = 'ready';
+      state.indexError = null;
+      published = true;
+    }
+  }
+  renderBanners();
+  renderCoreState();
+  if (!published) return;
+  performance.mark('search-ready');             // 搜尋框已啟用、首次查詢已執行
+  performance.measure('index-fetch-to-parsed', 'index-fetch-start', 'index-parsed');
+  performance.measure('parsed-to-searchable', 'index-parsed', 'search-ready');
+  renderTray();                                 // 比較籃 chip 補上品名
+  applyIndexToCurrentView();
+}
+
+/** 只抓 index（T1／T2 啟動，或 meta ready 時的重試）。meta 不重抓（I1）。 */
+async function loadIndex() {
+  const seq = ++state.indexSeq;
+  state.indexStarted = true;
+  state.indexState = 'loading';
+  state.indexError = null;
+  renderBanners();                              // 重試時清掉舊的錯誤訊息與重試鈕
+  renderCoreState();
+  const r = await fetchIndex();
+  if (seq !== state.indexSeq || state.metaState !== 'ready') return;
+  settleIndex(r);
+}
+
+/** D2：meta ready 後 index 只啟動一次。 */
+function startIndex() {
+  if (state.metaState !== 'ready' || state.indexStarted) return;
+  loadIndex();
+}
+
+/**
+ * 所有「進入視圖」都經過這裡（route、頁內導覽、比較籃增刪導致的重新載入）。
+ * meta ready 後第一次進入：其載入工作落定即 T1；之後任一次進入即 T2。兩者都只是呼叫 startIndex()。
+ */
+function enter(view, ...args) {
+  let first = false;
+  if (state.metaState === 'ready' && !state.indexStarted) {
+    state.entries += 1;
+    if (state.entries === 1) first = true;
+    else startIndex();
+  }
+  const work = view(...args);
+  if (first) Promise.resolve(work).then(startIndex, startIndex);
+  return work;
+}
+
 async function loadCore() {
   const seq = ++state.coreSeq;
-  state.core = 'loading';
-  state.coreError = null;
+  const home = isHomeEntry();
+  state.metaState = 'loading';
+  state.metaError = null;
+  state.indexSeq++;                             // 使在途的 index 請求失效
+  state.indexState = home ? 'loading' : 'idle';
+  state.indexError = null;
+  state.indexStarted = home;
+  state.entries = 0;
   state.status = null;
   state.statusError = null;
   state.statusSettled = false;
@@ -93,7 +189,6 @@ async function loadCore() {
   renderCoreState();
   route();                    // 載入中：詳細頁顯示「資料載入中」，不得顯示「查無」
 
-  performance.mark('index-fetch-start');
   fetchJSON('data/status.json', TIMEOUT.status).then((s) => [s, null], (e) => [null, e]).then(([s, e]) => {
     if (seq !== state.coreSeq) return;
     state.status = s;
@@ -105,76 +200,98 @@ async function loadCore() {
     if (state.current) renderDetail();          // 紅色警示須同步加註於現行價旁
   });
 
-  let next;
+  // 首頁入口：index 與 meta 平行抓（與舊版相同，G3）；結果扣住，等 meta 落定才驗版
+  const indexSeq = state.indexSeq;
+  const indexP = home ? fetchIndex() : null;
+
+  let meta = null;
+  let error = null;
   try {
-    const indexP = fetchJSON('data/drug_index.json', TIMEOUT.index).then((x) => {
-      if (seq === state.coreSeq) performance.mark('index-parsed');
-      return x;
-    });
-    const [meta, index] = await Promise.all([fetchJSON('data/meta.json', TIMEOUT.meta), indexP]);
+    meta = await fetchJSON('data/meta.json', TIMEOUT.meta);
     if (!E.validateMeta(meta).ok) throw new LoadError('invalid', 'meta.json 內容不合法');
-    const vi = E.validateIndex(index, meta);
-    if (vi.reason === 'version_mismatch') next = { core: 'mismatch' };
-    else if (!vi.ok) throw new LoadError('invalid', 'drug_index.json 內容不合法');
-    else {
-      next = {
-        core: 'ready', meta,
-        prepared: E.prepareIndex(index.drugs),
-        byCode: new Map(index.drugs.map((d) => [d.code, d])),
-      };
-    }
   } catch (e) {
-    next = { core: 'error', coreError: e instanceof LoadError ? e : new LoadError('invalid', String(e)) };
+    error = asLoadError(e);
   }
   if (seq !== state.coreSeq) return;            // 已有較新的載入：丟棄本次結果
 
-  state.core = next.core;
-  state.coreError = next.coreError || null;
-  if (next.core === 'ready') {
-    state.meta = next.meta;
-    state.prepared = next.prepared;
-    state.byCode = next.byCode;
-    state.shardCache.clear();
+  if (error) {
+    // meta error → 丟棄 index 結果，index 回 idle；retry-core 重抓兩者（D2）
+    state.metaState = 'error';
+    state.metaError = error;
+    state.indexSeq++;
+    state.indexState = 'idle';
+    state.indexStarted = false;
+    renderBanners();
+    renderSource();
+    renderCoreState();
+    route();
+    return;
   }
+
+  state.meta = meta;
+  state.metaState = 'ready';
   renderBanners();
   renderSource();
   renderCoreState();
-  if (state.core === 'ready') {
-    performance.mark('search-ready');           // 搜尋框已啟用、首次查詢已執行
-    performance.measure('index-fetch-to-parsed', 'index-fetch-start', 'index-parsed');
-    performance.measure('parsed-to-searchable', 'index-parsed', 'search-ready');
+  route();                                      // meta ready 時 route() 一次；index 落定時不 route()（§5.3）
+
+  if (indexP) {
+    const r = await indexP;
+    if (seq !== state.coreSeq || indexSeq !== state.indexSeq) return;
+    settleIndex(r);
   }
-  route();
 }
 
-function coreMessageHTML() {
-  if (state.core === 'loading') return '<div class="card"><p class="loading">資料載入中…</p></div>';
-  if (state.core === 'mismatch') {
-    return '<div class="alert alert--error">資料已更新，請重新整理頁面。<button type="button" data-action="reload">重新整理</button></div>';
-  }
-  return `<div class="alert alert--error">無法載入藥價資料（${esc(state.coreError?.message)}），目前無法查詢。`
-    + '<button type="button" data-action="retry-core">重試</button></div>';
+const RELOAD_BUTTON = '<button type="button" data-action="reload">重新整理</button>';
+const RETRY_CORE_BUTTON = '<button type="button" data-action="retry-core">重試</button>';
+const coreErrorHTML = (err) => `<div class="alert alert--error">無法載入藥價資料（${esc(err?.message)}），目前無法查詢。${RETRY_CORE_BUTTON}</div>`;
+
+/** 需要 meta 的視圖（詳情、比較）在 meta 尚未 ready 時顯示的內容。 */
+function metaMessageHTML() {
+  if (state.metaState === 'loading') return '<div class="card"><p class="loading">資料載入中…</p></div>';
+  return coreErrorHTML(state.metaError);
 }
+
+/** 搜尋是否仍在等資料（M1、M2、M4）；其餘非 ready 的情況都是「無法使用」。 */
+const searchPending = () => state.metaState === 'loading'
+  || (state.metaState === 'ready' && (state.indexState === 'idle' || state.indexState === 'loading'));
 
 function renderCoreState() {
   const q = $('q');
   const status = $('searchStatus');
-  if (state.core === 'ready') {
+  if (state.indexState === 'ready') {
     q.disabled = false;
     q.placeholder = '例：AC48092100、撫緒、paroxetine';
     runSearch();
     return;
   }
   q.disabled = true;
-  q.placeholder = state.core === 'loading' ? '資料載入中…' : '資料無法使用';
+  q.placeholder = searchPending() ? '資料載入中…' : '資料無法使用';
   $('results').innerHTML = '';
-  status.textContent = state.core === 'loading' ? '資料載入中…' : '資料無法使用，請見上方訊息。';
+  status.textContent = searchPending() ? '資料載入中…' : '資料無法使用，請見上方訊息。';
 }
 
 // ── 橫幅：核心錯誤、過期警示（spec §8.6）─────────────────────────
+/** meta 與 index 的錯誤訊息。index 的訊息在搜尋頁沿用既有文案，其他視圖用 spec-startup §5.5 的文案。 */
+function coreBannerHTML() {
+  if (state.metaState === 'error') return coreErrorHTML(state.metaError);
+  if (state.metaState !== 'ready') return '';
+  const onSearch = !$('searchView').hidden;
+  if (state.indexState === 'error') {
+    return onSearch ? coreErrorHTML(state.indexError)
+      : `<div class="alert alert--error">搜尋功能暫時無法使用（${esc(state.indexError?.message)}）。目前頁面的資料不受影響。${RETRY_CORE_BUTTON}</div>`;
+  }
+  if (state.indexState === 'mismatch') {
+    return onSearch ? `<div class="alert alert--error">資料已更新，請重新整理頁面。${RELOAD_BUTTON}</div>`
+      : `<div class="alert alert--error">搜尋資料與目前頁面的資料版本不一致。請重新整理頁面。${RELOAD_BUTTON}</div>`;
+  }
+  return '';
+}
+
 function renderBanners() {
   const out = [];
-  if (state.core === 'error' || state.core === 'mismatch') out.push(coreMessageHTML());
+  const core = coreBannerHTML();
+  if (core) out.push(core);
   if (state.compareNotice) out.push(`<div class="alert alert--info">${esc(state.compareNotice)}</div>`);
   const st = stale();
   if (st.level === 'yellow' || st.level === 'red') {
@@ -248,7 +365,7 @@ function renderCard(d) {
 }
 
 function runSearch() {
-  if (state.core !== 'ready') return;
+  if (state.indexState !== 'ready') return;
   const q = $('q').value;
   const status = $('searchStatus');
   const t0 = performance.now();
@@ -297,14 +414,14 @@ function scheduleSearch() {
 function route() {
   const params = new URLSearchParams(location.search);
   const code = params.get('code');
-  if (params.get('view') === 'upcoming') showUpcoming();
+  if (params.get('view') === 'upcoming') enter(showUpcoming);
   else if (params.get('codes') !== null) {
     // 情境 C（冷開 deep link）：導覽開始即為起點，只記錄不設門檻
     if (!performance.getEntriesByName('compare-open-start').length) performance.mark('compare-open-start');
-    showCompare();
+    enter(showCompare);
   }
-  else if (code !== null) showDetail(code.trim().toUpperCase());
-  else showSearch();
+  else if (code !== null) enter(showDetail, code.trim().toUpperCase());
+  else enter(showSearch);
 }
 
 function showSearch() {
@@ -313,79 +430,139 @@ function showSearch() {
   state.upcomingSeq++;                 // 同時使在途的預告請求失效，其回應一律丟棄
   state.compareSeq++;
   state.current = null;
+  state.absent = null;
   $('detailView').hidden = true;
   $('upcomingView').hidden = true;
   $('compareView').hidden = true;
   $('searchView').hidden = false;
   $('detail').innerHTML = '';
   document.title = APP_TITLE;
+  renderBanners();                     // index 的訊息在搜尋頁與其他視圖文案不同（spec-startup §5.5）
 }
 
 function navigate(code) {
   history.pushState({ code, fromSearch: true }, '', `?code=${encodeURIComponent(code)}`);
-  showDetail(code);
+  enter(showDetail, code);
   window.scrollTo(0, 0);
 }
 
 // ── 詳細頁 ──────────────────────────────────────────────────────
+// 「資料中不存在」的兩種依據與其在資料矛盾時的錯誤文案（spec-startup D4.3）
+const ABSENT_TEXT = { prefix: '分片清單中找不到此代號', key: '分片中缺少此代號' };
+const indexHas = (code) => state.indexState === 'ready' && state.byCode.has(code);
+
+function notFoundHTML(code) {
+  return `<div class="card"><h2>查無此代號</h2>
+      <p>找不到健保代號 <span class="mono">${esc(code) || '（空白）'}</span>。請確認代號是否正確，或<a href="./" data-action="to-search">回搜尋頁</a>以品名查詢。</p></div>`;
+}
+
+const detailTitle = (code, name) => `${name || code}（${code}）— ${APP_TITLE}`;
+
+/**
+ * 依 meta 與已驗版的 shard 判定代號不存在（D4.1 第 4、8 列）。
+ * 已發布的 index 卻含該代號＝建置缺陷，顯示錯誤而非查無；index 之後才發布時由 applyIndexToCurrentView() 更正。
+ */
+function renderAbsent(code, basis) {
+  state.absent = { code, basis };
+  if (indexHas(code)) {
+    $('detail').innerHTML = shardErrorHTML(code, ABSENT_TEXT[basis]);
+    document.title = detailTitle(code, '');
+  } else {
+    $('detail').innerHTML = notFoundHTML(code);
+    document.title = `查無此代號 — ${APP_TITLE}`;
+  }
+}
+
+/** 判定順序見 spec-startup D4.1。回傳的 promise 在本次進入的載入工作落定（含驗證）後 resolve，供 T1 使用。 */
 async function showDetail(code) {
   const seq = ++state.detailSeq;
   state.upcomingSeq++;                 // 同上：離開預告頁即丟棄其在途回應
   state.compareSeq++;
   state.current = null;
+  state.absent = null;
   $('searchView').hidden = true;
   $('upcomingView').hidden = true;
   $('compareView').hidden = true;
   $('detailView').hidden = false;
+  renderBanners();
   const box = $('detail');
 
-  if (state.core !== 'ready') {
-    box.innerHTML = coreMessageHTML();
+  // 第 1 列：輸入語法無效。不依賴資料，任何 meta 狀態下皆成立；不檢查長度
+  if (code === '' || /[^A-Z0-9]/.test(code)) {
+    box.innerHTML = notFoundHTML(code);
+    document.title = `查無此代號 — ${APP_TITLE}`;
+    return;
+  }
+  // 第 2、3 列
+  if (state.metaState !== 'ready') {
+    box.innerHTML = metaMessageHTML();
     document.title = APP_TITLE;
     return;
   }
   state.today = E.localISODate();
-  const drug = state.byCode.get(code);
-  if (!drug) {
-    box.innerHTML = `<div class="card"><h2>查無此代號</h2>
-      <p>找不到健保代號 <span class="mono">${esc(code) || '（空白）'}</span>。請確認代號是否正確，或<a href="./" data-action="to-search">回搜尋頁</a>以品名查詢。</p></div>`;
-    document.title = `查無此代號 — ${APP_TITLE}`;
-    return;
-  }
-
-  document.title = `${drug.chName || code}（${code}）— ${APP_TITLE}`;
-  box.innerHTML = `<div class="card"><p class="loading">載入 <span class="mono">${esc(code)}</span> 的歷史資料中…</p></div>`;
-
+  // 第 4 列
   const prefix = E.shardPrefix(code, state.meta.shards);
+  if (!prefix) { renderAbsent(code, 'prefix'); return; }
+
+  // 第 4a 列：落定前不得落入任何錯誤或查無
+  document.title = detailTitle(code, '');
+  box.innerHTML = `<div class="card"><p class="loading">載入 <span class="mono">${esc(code)}</span> 的歷史資料中…</p></div>`;
   let shard;
   try {
-    if (!prefix) throw new LoadError('invalid', '分片清單中找不到此代號');
     const t0 = performance.now();
-    shard = state.shardCache.get(prefix) ?? await fetchJSON(`data/history/${encodeURIComponent(prefix)}.json`, TIMEOUT.shard);
+    shard = await loadShard(prefix);
     performance.measure('shard-fetch-parse', { start: t0 });
   } catch (e) {
     if (seq !== state.detailSeq) return;
-    box.innerHTML = shardErrorHTML(code, e.message);
+    box.innerHTML = shardErrorHTML(code, e.message);                     // 第 5 列
     return;
   }
   if (seq !== state.detailSeq) return;            // 使用者已改選其他代號：丟棄本回應
 
   const v = E.validateShard(shard, state.meta, prefix, code);
-  if (!v.ok) {
-    box.innerHTML = v.reason === 'version_mismatch'
-      ? '<div class="alert alert--error">資料已更新，請重新整理頁面。<button type="button" data-action="reload">重新整理</button></div>'
-      : shardErrorHTML(code, v.reason === 'missing_code' ? '分片中缺少此代號' : '分片內容不合法');
+  if (v.reason === 'version_mismatch') {                                 // 第 7 列
+    box.innerHTML = `<div class="alert alert--error">資料已更新，請重新整理頁面。${RELOAD_BUTTON}</div>`;
     return;
   }
-  state.shardCache.set(prefix, shard);
-  state.current = { code, drug, entry: shard.drugs[code] };
+  if (v.reason === 'missing_code') { renderAbsent(code, 'key'); return; }   // 第 8 列
+  if (!v.ok) {                                                           // 第 6、9 列
+    box.innerHTML = shardErrorHTML(code, '分片內容不合法');
+    return;
+  }
+  state.current = { code, entry: shard.drugs[code] };
   try {
     const t0 = performance.now();
     renderDetail();
     performance.measure('detail-render', { start: t0 });
+    // D5：標題的品名與頁面 H2 同源（shard），不讀 index
+    document.title = detailTitle(code, E.selectMeta(state.current.entry, state.today)?.chName);
   } catch (e) {
     state.current = null;
     box.innerHTML = shardErrorHTML(code, `畫面產生失敗：${e.message}`);
+  }
+}
+
+/**
+ * index 發布時對目前視圖允許的局部變動，窮舉為兩項（spec-startup D4.4）：
+ *   1. D4.3 的查無 → 錯誤更正（詳情頁的目前代號；比較頁的該代號狀態）
+ *   2. 比較主體內 selectMeta 回 null 的代號，其品名位置補上 index 的 chName（只改該文字節點）
+ * 更正資格只看此刻的畫面狀態：已離開的代號不會被回頭更正。
+ */
+function applyIndexToCurrentView() {
+  if (!$('detailView').hidden && state.absent && indexHas(state.absent.code)) {
+    renderAbsent(state.absent.code, state.absent.basis);
+    return;
+  }
+  if ($('compareView').hidden) return;
+  if (applyCompareContradictions()) { renderCompare(); return; }
+  for (const li of document.querySelectorAll('#compareBody .compare-code[data-status="ok"]')) {
+    const code = li.dataset.code;
+    const d = state.compareData.get(code);
+    const name = li.querySelector('.compare-name');
+    if (!d || d.status !== 'ok' || !name || name.textContent !== '') continue;
+    if (E.selectMeta(d.entry, state.today)?.chName != null) continue;
+    const fallback = state.byCode.get(code)?.chName;
+    if (fallback) name.textContent = fallback;
   }
 }
 
@@ -700,7 +877,7 @@ function renderUpcomingBadge() {
 
 async function loadUpcoming({ force = false } = {}) {
   const u = state.upcoming;
-  if (state.core === 'loading') {        // 版本驗證需要 meta；核心資源落定後 route() 會再進來
+  if (state.metaState === 'loading') {   // 版本驗證需要 meta；meta 落定後 route() 會再進來
     state.upcoming = { ...u, phase: 'loading' };
     renderUpcoming();
     return;
@@ -958,6 +1135,7 @@ function exportUpcomingCSV() {
 function showUpcoming() {
   state.detailSeq++;                   // 丟棄尚未回應的詳細頁請求
   state.current = null;
+  state.absent = null;
   state.today = E.localISODate();      // 每次進入取一次 T，該次檢視內不跨午夜更新（§2）
   $('searchView').hidden = true;
   $('detailView').hidden = true;
@@ -965,8 +1143,9 @@ function showUpcoming() {
   $('detail').innerHTML = '';
   $('upcomingView').hidden = false;
   document.title = `預告中心 — ${APP_TITLE}`;
+  renderBanners();
   renderUpcoming();
-  loadUpcoming({ force: true });       // 每次進入都重取：清單很小，且使 §5.5 的「更新失敗」可達
+  return loadUpcoming({ force: true });   // 每次進入都重取：清單很小，且使 §5.5 的「更新失敗」可達
 }
 
 // ── 比較籃（spec-compare.md §3）──────────────────────────────────
@@ -1024,7 +1203,7 @@ function addCompare(code) {
 
 function removeCompare(code) {
   setCompare(state.compare.items.filter((x) => x.code !== code));
-  if (!$('compareView').hidden) showCompare();       // 比較視圖內移除：依 §3.3 重新決定去向
+  if (!$('compareView').hidden) enter(showCompare);  // 比較視圖內移除：依 §3.3 重新決定去向
 }
 
 /** URL 一律優先於 sessionStorage：分享出去的連結不得混入對方自己的籃子。 */
@@ -1097,7 +1276,11 @@ const COMPARE_STATUS_TEXT = {
   ok: '',
 };
 
-/** 同片只 fetch 一次；**進行中**的請求也共享，不得因第二個代號而發第二個請求。 */
+/**
+ * 詳情頁與比較頁共用。同片只 fetch 一次；**進行中**的請求也共享，不得因第二個請求者而發第二個請求。
+ * 快取只保存**已通過 shardVersion 比對**的 shard（spec-startup §5.3）：meta 在頁面生命週期內不變（I1），
+ * 通過比對者永遠有效；未通過或結構不合法者不留快取，必須可重試。
+ */
 function loadShard(prefix) {
   const cached = state.shardCache.get(prefix);
   if (cached) return Promise.resolve(cached);
@@ -1105,13 +1288,21 @@ function loadShard(prefix) {
   if (!inflight) {
     inflight = fetchJSON(`data/history/${encodeURIComponent(prefix)}.json`, TIMEOUT.shard)
       .then((shard) => {
-        state.shardCache.set(prefix, shard);      // 失敗不進快取，必須可重試
+        const versionOk = shard !== null && typeof shard === 'object' && !Array.isArray(shard)
+          && shard.drugs !== null && typeof shard.drugs === 'object' && !Array.isArray(shard.drugs)
+          && typeof shard.shardVersion === 'string' && shard.shardVersion === state.meta.shards.versions[prefix];
+        if (versionOk) state.shardCache.set(prefix, shard);
         return shard;
       })
       .finally(() => state.shardInflight.delete(prefix));
     state.shardInflight.set(prefix, inflight);
   }
   return inflight;
+}
+
+function evictShardOf(code) {
+  const prefix = state.meta ? E.shardPrefix(code, state.meta.shards) : null;
+  if (prefix) state.shardCache.delete(prefix);
 }
 
 /** `only`：只重載這些代號（重試）；null 代表整批重載。重試一律一次處理完所有失敗代號，
@@ -1132,30 +1323,50 @@ async function loadCompareData({ only = null } = {}) {
   state.compareMismatch = false;
   renderCompare();
 
+  // 結果先收在區域變數：過期回應不得改動任何視圖狀態或錯誤旗標（spec-startup §5.3）
+  const results = new Map();
+  let mismatch = false;
   await Promise.all(items.filter((x) => x.valid && (!retry || retry.has(x.code))).map(async (x) => {
     const prefix = E.shardPrefix(x.code, state.meta.shards);
-    if (!prefix) { data.set(x.code, { status: 'missing', entry: null, error: null }); return; }
+    // missing 保留「不存在的依據」（無匹配前綴／已驗版 shard 缺 own key），供 D4.3 判定資料矛盾
+    if (!prefix) { results.set(x.code, { status: 'missing', entry: null, error: null, basis: 'prefix' }); return; }
     try {
       const shard = await loadShard(prefix);
       const v = E.validateShard(shard, state.meta, prefix, x.code);
       if (v.reason === 'version_mismatch') {
-        // 混批一律整頁不組合（非部分降級）：快取命中時也要比對版本
-        state.shardCache.delete(prefix);
-        state.compareMismatch = true;
-        data.set(x.code, { status: 'error', entry: null, error: '資料版本不一致' });
+        // 混批一律整頁不組合（非部分降級）
+        mismatch = true;
+        results.set(x.code, { status: 'error', entry: null, error: '資料版本不一致' });
       } else if (v.reason === 'missing_code') {
-        data.set(x.code, { status: 'missing', entry: null, error: null });
+        results.set(x.code, { status: 'missing', entry: null, error: null, basis: 'key' });
       } else if (!v.ok) {
-        data.set(x.code, { status: 'error', entry: null, error: '分片內容不合法' });
+        results.set(x.code, { status: 'error', entry: null, error: '分片內容不合法' });
       } else {
-        data.set(x.code, { status: 'ok', entry: shard.drugs[x.code], error: null });
+        results.set(x.code, { status: 'ok', entry: shard.drugs[x.code], error: null });
       }
     } catch (e) {
-      data.set(x.code, { status: 'error', entry: null, error: e.message });
+      results.set(x.code, { status: 'error', entry: null, error: e.message });
     }
   }));
   if (seq !== state.compareSeq) return;           // 使用者已改選：丟棄本回應
+  for (const [code, r] of results) data.set(code, r);
+  state.compareMismatch = mismatch;
+  applyCompareContradictions();
   renderCompare();
+}
+
+/**
+ * D4.3（比較頁）：某代號為 missing、依據為無匹配前綴或已驗版 shard 缺 key，而已發布的 index 含該代號
+ * → 該代號改為 error。只影響該代號。回傳是否有任何代號被更正。
+ */
+function applyCompareContradictions() {
+  let changed = false;
+  for (const [code, d] of state.compareData) {
+    if (d.status !== 'missing' || !d.basis || !indexHas(code)) continue;
+    state.compareData.set(code, { status: 'error', entry: null, error: ABSENT_TEXT[d.basis], basis: d.basis, contradiction: true });
+    changed = true;
+  }
+  return changed;
 }
 
 /** §6.1「完整成功」＝所有選定代號皆已取得有效且版本一致的資料。 */
@@ -1211,7 +1422,7 @@ function renderCompare() {
       <span class="tray-dot" aria-hidden="true"></span>
       <span class="mono">${esc(x.code)}</span>
       <span class="compare-name">${esc(name)}</span>
-      <span class="compare-state">${esc(COMPARE_STATUS_TEXT[d.status])}</span>
+      <span class="compare-state">${esc(COMPARE_STATUS_TEXT[d.status])}${d.contradiction ? `（${esc(d.error)}）` : ''}</span>
       <button type="button" class="link-btn" data-action="tray-remove" data-code="${esc(x.code)}">移除</button>
     </li>`;
   }).join('')}</ul>`;
@@ -1230,6 +1441,7 @@ function showCompare() {
   state.detailSeq++;
   state.upcomingSeq++;
   state.current = null;
+  state.absent = null;
   restoreCompare();
   const items = state.compare.items;
 
@@ -1239,9 +1451,9 @@ function showCompare() {
     setCompare([], { syncUrl: false });
     history.replaceState(history.state, '', `?code=${encodeURIComponent(code)}`);
     state.compareNotice = '比較需要 2 個以上品項，已為你開啟單品項頁。';
-    showDetail(code);
+    const work = showDetail(code);         // 以轉入後的詳情為本次進入的載入工作（spec-startup D2）
     renderBanners();
-    return;
+    return work;
   }
   $('searchView').hidden = true;
   $('detailView').hidden = true;
@@ -1249,19 +1461,20 @@ function showCompare() {
   $('compareView').hidden = false;
   document.title = `多代號比較 — ${APP_TITLE}`;
   state.today = E.localISODate();          // 一次比較共用同一個 T，進入時取得一次（§4.4）
+  renderBanners();
 
   if (items.length === 0) {
     $('compareBanner').innerHTML = '';
     $('compareSkipped').textContent = '';
     $('compareBody').innerHTML = '<div class="card"><p>代號皆無資料。請回<a href="./" data-action="to-search">搜尋頁</a>重新選擇品項。</p></div>';
     history.replaceState(history.state, '', location.pathname);
-    return;
+    return undefined;
   }
-  if (state.core !== 'ready') {
-    $('compareBody').innerHTML = coreMessageHTML();
-    return;
+  if (state.metaState !== 'ready') {
+    $('compareBody').innerHTML = metaMessageHTML();
+    return undefined;
   }
-  loadCompareData();
+  return loadCompareData();
 }
 
 // ── 比較圖表（spec-compare.md §4）────────────────────────────────
@@ -1706,11 +1919,11 @@ function bind() {
     if (action === 'to-search') {
       e.preventDefault();
       if (history.state?.fromSearch) history.back();
-      else { history.pushState(null, '', location.pathname); showSearch(); }
+      else { history.pushState(null, '', location.pathname); enter(showSearch); }
     } else if (action === 'to-upcoming') {
       e.preventDefault();
       history.pushState({ fromSearch: true }, '', '?view=upcoming');
-      showUpcoming();
+      enter(showUpcoming);
       window.scrollTo(0, 0);
     } else if (action === 'to-detail') {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -1746,26 +1959,33 @@ function bind() {
     } else if (action === 'tray-clear') {
       e.preventDefault();
       setCompare([], { syncUrl: false });
-      if (!$('compareView').hidden) { history.pushState(null, '', location.pathname); showSearch(); }
+      if (!$('compareView').hidden) { history.pushState(null, '', location.pathname); enter(showSearch); }
     } else if (action === 'tray-start') {
       e.preventDefault();
       performance.mark('compare-open-start');          // 情境 A 的起點
 
       history.pushState({ fromSearch: true }, '', `?codes=${encodeURIComponent(E.serializeCompareCodes(state.compare.items))}`);
-      showCompare();
+      enter(showCompare);
       window.scrollTo(0, 0);
     } else if (action === 'compare-retry') {
       const failed = state.compare.items
         .filter((x) => state.compareData.get(x.code)?.status === 'error').map((x) => x.code);
+      // 資料矛盾（缺 key）的 shard 已通過版本比對而留在快取：重試須重新請求該片
+      for (const code of failed) if (state.compareData.get(code)?.contradiction) evictShardOf(code);
       if (failed.length) loadCompareData({ only: failed });
     } else if (action === 'upcoming-csv') {
       exportUpcomingCSV();
     } else if (action === 'retry-upcoming') {
       loadUpcoming({ force: true });
     } else if (action === 'retry-core') {
-      loadCore();
+      // meta 已 ready：只重抓 index，不重抓 meta、不重畫目前主體（I1、spec-startup §5.4）
+      if (state.metaState === 'ready') loadIndex();
+      else loadCore();
     } else if (action === 'retry-shard') {
-      if (new URLSearchParams(location.search).get('code')?.trim().toUpperCase() === el.dataset.code) showDetail(el.dataset.code);
+      if (new URLSearchParams(location.search).get('code')?.trim().toUpperCase() === el.dataset.code) {
+        evictShardOf(el.dataset.code);       // 缺碼的 shard 可能已在快取：重試須重新請求該片（S9(i)）
+        showDetail(el.dataset.code);
+      }
     } else if (action === 'reload') {
       location.reload();
     } else if (action === 'toggle-sort' && state.current) {

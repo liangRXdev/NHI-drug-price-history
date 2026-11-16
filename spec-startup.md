@@ -1,6 +1,6 @@
 # Spec — 首訪啟動策略（Startup Fast Path）
 
-- 版本：v0.3（2026-11-14，兩輪 `/codex-checkplan` 覆審後修訂；第二輪 0 Blocker／0 High）
+- 版本：v0.3.1（2026-11-16；v0.3 為 2026-11-14 兩輪 `/codex-checkplan` 覆審後修訂，第二輪 0 Blocker／0 High）
 - 基準 commit：`7ac1760`（main）
 - 上位規格：`spec.md`（§7、§8.7、§16）。本文件與上位規格衝突時，以本文件明列的「推翻」為準，其餘一律沿用
 - 前案：`spec-index-format.md`（分支 `feat/index-columnar-b`，**已終止、不得合併**）
@@ -365,7 +365,7 @@ D4.1 第 4 列把「無匹配前綴」當作不存在的證據，前提是 shard
 | **S6** | **詳情與 index 無關，且內容正確**：對 §8.1 每個代號，先以 golden fixture 的**獨立預期值**核對現行價（或狀態標籤）、最新事件生效日、歷史表筆數、H2 品名、`document.title`；再比對「index 永不回應（斷言其請求仍 pending）」與「index 已發布」兩種情況下 `#detail` 的 `innerHTML` 逐字相同。`status.json` 固定為同一回應、同一 `today`、同一視窗寬度 | 兩邊都顯示相同的錯誤內容或空殼；`title` 不在 `#detail` 內而漏驗；兩邊其實都等到 index |
 | **S7** | **index 晚到失敗不撤、不重畫**：詳情顯示且 `status` 已落定後，先把排序切到非預設方向，並對 `#detail` 掛 `MutationObserver`（subtree、childList、attributes、characterData）。index 分別回 (a) HTTP 500 (b) 非 JSON (c) `dataVersion` 不符 (d) body 逾時：**mutation 記錄數為 0**；事前保存的摘要標題節點與表格首列節點仍在文件中（`isConnected`）；排序方向不變；shard 請求數仍為 1；橫幅**可見**且文案為 §5.5 對應句；按橫幅按鈕的行為正確（a、b、d 為重試、c 為重新整理） | 保留根節點但重設 `innerHTML` 為相同內容；shard 命中快取掩蓋重畫 |
 | **S8** | **查無從嚴**：D4.1 各列逐列測，且**列內每個結構條件各一個反例，不得一列只選一個代表**。指名反例（文字不得含「查無」，並斷言其錯誤分類）：`meta` 永不回應＋合法代號；`meta` 500；shard 在途（第 4a 列，文字亦不得含錯誤文案）；shard 500；shard 非 JSON；shard body 逾時；**shard 外層三條件**——整體非物件（陣列、`null`）、`shardVersion` 非字串、`drugs` 非物件；版本不符；**條目四條件**——值為 `null`、`records` 非陣列、`invalidRecords` 非陣列或缺、`meta` 非物件且 `metaVariants` 非陣列；**shard map 六條件**（→ `meta` error）——`files` 為空、成員非字串、成員為空字串、成員重複、`files` 與 `versions` 的 key 集合不等（兩個方向各一）、version 值為空字串或非字串。正例：空碼與含非法字元 → 查無且 shard 請求數 0（**含 `meta` 永不回應時**）；前綴不在清單 → 查無且 shard 請求數 0；**合法英數但非 10 碼、存在於 shard 的合成代號 → 完整詳情**。實際 `data/meta.json` 通過 §5.7 | 只特判 `records`；用長度短路；`meta` 未到時把合法代號顯示成查無 |
-| **S9** | **資料矛盾與到達順序無關**（D4.3）：(a) shard 缺 key、index 之後發布且含該代號 → 由查無改為「分片中缺少此代號」；(b) index 先發布、之後 shard 缺 key → **直接**顯示該錯誤，過程中不得出現查無；(c) index 發布且不含該代號 → 維持查無；(d) A 查無後導覽到 B，index 才發布且含 A → B 的畫面與標題不變；(e) index 為 mismatch 且其內容含該代號 → 維持查無；(f) 比較頁：兩個代號，一個 key 不存在且 index 含之 → 該代號為錯誤、另一代號的序列與表格不變；一個條目結構壞 → 「分片內容不合法」；(g) **無匹配前綴**版本的 (a)(b)(c)，詳情頁與比較頁各測，錯誤文案為「分片清單中找不到此代號」；(h) A 查無 → 離開 → 返回 A 時 index 已發布且含 A → 直接顯示錯誤；(i) shard 第一次缺 key → `retry-shard` 取得含該 key 的 shard 並顯示完整詳情 → index 才發布且含該代號 → **詳情維持、零 mutation** | 只測 (c)；更正套到已離開的品項；用未驗證的 index 當證據；保留歷史請求的更正資格覆蓋成功的詳情；兩個視圖對同一矛盾分類不同 |
+| **S9** | **資料矛盾與到達順序無關**（D4.3）：(a) shard 缺 key、index 之後發布且含該代號 → 由查無改為「分片中缺少此代號」；(b) index 先發布、之後 shard 缺 key → **直接**顯示該錯誤，過程中不得出現查無；(c) index 發布且不含該代號 → 維持查無；(d) A 查無後導覽到 B，index 才發布且含 A → B 的畫面與標題不變；(e) index 為 mismatch 且其內容含該代號 → 維持查無；(f) 比較頁：兩個代號，一個 key 不存在且 index 含之 → 該代號為錯誤、另一代號的序列與表格不變；一個條目結構壞 → 「分片內容不合法」；(g) **無匹配前綴**版本的 (a)(b)(c)，詳情頁與比較頁各測，錯誤文案為「分片清單中找不到此代號」；(h) A 查無 → 離開 → 返回 A 時 index 已發布且含 A → 直接顯示錯誤；(i) index 已發布且含該代號、shard 第一次缺 key → 直接顯示錯誤 → `retry-shard` **重新請求該片**（不得沿用已快取的缺碼 shard）取得含該 key 的 shard → 完整詳情；離開再返回仍為完整詳情，全程不得出現查無 | 只測 (c)；更正套到已離開的品項；用未驗證的 index 當證據；保留歷史請求的更正資格覆蓋成功的詳情；兩個視圖對同一矛盾分類不同 |
 | **S10** | **啟動觸發**：(a) T1：shard 落定前 index 請求數 0、落定後 1；(b) T2 各入口分測——`popstate`、點「回搜尋頁」、點「前往預告中心」、比較籃增刪——shard 未落定時觸發後 index 請求數立即為 1；(c) T2 之後 shard 才落定 → index 請求數仍為 1；(d) 零請求的首個視圖（語法無效代號、前綴不在清單、`?codes=` 零個有效代號）→ `meta` ready 後 index 請求數為 1；(e) **多請求的首個視圖**：`?codes=` 兩個不同片的代號，一片已完成、另一片 body 未完 → index 請求數 0，兩片皆落定後恰為 1；(f) `?view=upcoming`：`upcoming.json` body 未完 → index 請求數 0，落定後恰為 1；(g) `?codes=` 單一有效代號轉詳情：該詳情的 shard body 未完 → 0，落定後恰為 1 | 只測 T1；重複啟動；零請求時永不啟動；第一片落定就啟動；請求一發出就啟動 |
 | **S11** | **只重試 index**：`meta` ready、index error 時按重試 → `meta.json` 請求數不增加、shard 請求數不增加、`#detail` 零 mutation、index 請求數 +1。接著分三支：重試成功 → 切到搜尋頁以固定查詢得到預期首筆、橫幅消失；重試再失敗 → 橫幅仍在、可再按；重試得到版本不符 → mismatch 橫幅、搜尋不可用。重試在途時導覽到另一代號 → 重試結果抵達後視圖仍為該代號 | 請求數增加但結果被丟棄；未比版本就開放搜尋；把使用者拉回原視圖 |
 | **S12** | **未驗版本的 index 不外洩**：首頁入口，index 已完整回 200 而 **`meta` 的 body 持續扣住**——扣住期間持續觀察（`MutationObserver` 掛在結果清單與比較籃）：無結果節點、無可進入詳情的連結、對搜尋框輸入不產生結果、比較籃 chip 無品名，**期間任何時刻都不得出現**。之後分三支放行 `meta`：版本相符 → 搜尋可用；版本不符 → mismatch；`meta` 500 → 維持上述「無外洩」狀態。之後 `retry-core`（`meta` 改回 200、index 版本相符）→ 搜尋以固定查詢得到預期首筆；另一支（index 版本不符）→ mismatch、搜尋不可用 | 搜尋框 disabled 但結果已渲染；重試後永久停用 |
@@ -439,6 +439,10 @@ D4.1 第 4 列把「無匹配前綴」當作不存在的證據，前提是 shard
 ---
 
 ## 12. 修訂紀錄
+
+- **v0.3.1（2026-11-16）**：S9(i) 改寫（使用者決策）。原情境「缺 key → `retry-shard` 成功 → index 才發布」無法到達：
+  依 D4.1 第 8 列，index 未發布時缺 key 顯示「查無此代號」，沒有 `retry-shard` 按鈕；index 一旦發布也不會再次發布。
+  改為可到達的順序，並明訂 `retry-shard` 須重新請求該片（通過版本比對的缺碼 shard 依 §5.3 會留在快取，沿用即永遠重試不成）。
 
 - **v0.3（2026-11-14）**：依 `.ai-review/plan-verdict-startup-r2.md`（第二輪，0 Blocker／0 High／11 Medium，全數接受）。
   - D4.1 加第 4a 列（shard 在途）、第 5–10 列限落定後評估；M10 補第 1、4a 列——B2

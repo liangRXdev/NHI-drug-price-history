@@ -162,13 +162,13 @@ for (const [row, code, text] of [[3, A, TEXT.coreError], [1, 'AC48-0921', TEXT.n
 }
 
 test('S5 M10 詳情｜meta ready｜index idle（shard 在途，第 4a 列）→ 載入中，無錯誤、無查無、無 index 訊息', async ({ page }) => {
-  await trackText(page, ['查無', TEXT.shardError, '搜尋']);
+  await trackText(page, ['查無', TEXT.shardError, '搜尋功能', '搜尋資料']);
   const site = await gatedSite(page, { plan: { 'shard:AC48': 'hold' } });
   await page.goto(`/?code=${A}`);
   await site.waitHeld('shard:AC48');
   await expect(detail(page)).toContainText(TEXT.shardLoading);
   await site.expectCountStays('index', 0);
-  for (const t of ['查無', TEXT.shardError, '搜尋']) expect(await everSaid(page, t), t).toBe(false);
+  for (const t of ['查無', TEXT.shardError, '搜尋功能', '搜尋資料']) expect(await everSaid(page, t), t).toBe(false);
 });
 
 test('S5 M10 詳情｜meta ready｜index loading → 詳情正確、不顯示任何 index 訊息', async ({ page }) => {
@@ -401,7 +401,8 @@ for (const [name, behavior, button, text] of [
 ]) {
   test(`S7${name} → #detail 零 mutation、節點仍在、排序不變、shard 不重抓、橫幅可操作`, async ({ page }) => {
     const data = buildData();
-    const site = await gatedSite(page, { data, plan: { index: 'hold' }, timeouts: { index: 700 } });
+    // (d)：逾時從 fetch 發出起算，須長於「扣住期間的前置步驟」，否則會在放行前就先逾時
+    const site = await gatedSite(page, { data, plan: { index: 'hold' }, timeouts: name.startsWith('(d)') ? { index: 4000 } : undefined });
     await page.goto(`/?code=${A}`);
     await expectDetailA(page);
     await expect(page.locator('#sourceInfo')).toContainText('資料無變動');       // status 已落定
@@ -414,6 +415,7 @@ for (const [name, behavior, button, text] of [
     });
     await watchMutations(page, '#detail');
 
+    await expect(banners(page)).not.toContainText('搜尋');                         // 放行前 index 仍在途，尚未失敗
     await site.release('index', behavior(data));
     await expect(banners(page)).toContainText(text);
     if (button === '重試') await expect(banners(page)).toContainText(TEXT.indexErrorTail);

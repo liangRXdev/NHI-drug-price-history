@@ -145,6 +145,7 @@ async function indexFailedOnDetail(page, second) {
   await expect(shown(page)).toBeVisible();
   await expect(banners(page)).toContainText(TEXT.indexError);
   await expect(banners(page)).toContainText(TEXT.indexErrorTail);
+  await expect(page.locator('#sourceInfo')).toContainText('資料無變動');        // status 已落定（落定時會重畫詳情）
   await watchMutations(page, '#detail');
   expect(site.count('meta')).toBe(1);
   expect(site.count('shard:AC48')).toBe(1);
