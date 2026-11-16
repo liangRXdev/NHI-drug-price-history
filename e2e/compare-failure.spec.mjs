@@ -206,7 +206,7 @@ test('M7 meta 缺該片版本 → meta 不合法，整頁不組合', async ({ pa
   const data = buildData();
   delete data.meta.shards.versions.A035;
   await mockSite(page, { today: '2026-09-11', data });
-  await page.goto('/?codes=A035680329,AC48092100');
+  await page.goto('/?codes=A035680329,AC48867100');
   const region = page.getByRole('region', { name: '多代號比較' });
   await expect(region).toContainText('meta.json 內容不合法');
   await expect(region.getByRole('button', { name: '重試' })).toBeVisible();
