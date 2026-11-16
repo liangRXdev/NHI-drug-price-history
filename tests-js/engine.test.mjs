@@ -476,6 +476,86 @@ test('E6 混批：index↔meta、shard↔meta 版本不一致 → version_mismat
   assert.equal(validateMeta({ dataVersion: 'v1' }).ok, false);
 });
 
+// ── spec-startup §5.7、D4.1、D4.2 ───────────────────────────────
+const metaWith = (shards) => ({ dataVersion: 'v1', shards });
+
+test('validateMeta 接受合法的 shard map', () => {
+  assert.deepEqual(validateMeta(metaWith({ files: ['AC48', 'B0'], versions: { AC48: 's1', B0: 's2' } })), { ok: true });
+});
+
+for (const [name, shards] of [
+  ['files 為空', { files: [], versions: {} }],
+  ['files 成員非字串', { files: ['AC48', 7], versions: { AC48: 's1', 7: 's2' } }],
+  ['files 成員為空字串', { files: ['AC48', ''], versions: { AC48: 's1', '': 's2' } }],
+  ['files 成員重複', { files: ['AC48', 'AC48'], versions: { AC48: 's1' } }],
+  ['files 成員重複而 versions 數量湊齊', { files: ['AC48', 'AC48'], versions: { AC48: 's1', B0: 's2' } }],
+  ['versions 缺 files 的成員', { files: ['AC48', 'B0'], versions: { AC48: 's1' } }],
+  ['versions 多出 files 沒有的 key', { files: ['AC48'], versions: { AC48: 's1', B0: 's2' } }],
+  ['versions 與 files 等長但 key 不同', { files: ['AC48', 'B0'], versions: { AC48: 's1', C0: 's2' } }],
+  ['version 值為空字串', { files: ['AC48'], versions: { AC48: '' } }],
+  ['version 值非字串', { files: ['AC48'], versions: { AC48: 1 } }],
+  ['versions 的 key 只在原型鏈上', { files: ['toString'], versions: {} }],
+]) {
+  test(`validateMeta 拒絕不合法的 shard map：${name}`, () => {
+    assert.deepEqual(validateMeta(metaWith(shards)), { ok: false, reason: 'invalid' });
+  });
+}
+
+test('validateIndex 沒有 meta 不得成功', () => {
+  const index = { dataVersion: 'v1', drugs: [] };
+  for (const meta of [null, undefined, {}, { dataVersion: 1 }]) {
+    assert.deepEqual(validateIndex(index, meta), { ok: false, reason: 'version_mismatch' });
+  }
+  assert.deepEqual(validateIndex({ dataVersion: 'v1' }, null), { ok: false, reason: 'invalid' });   // 結構先於版本
+  assert.deepEqual(validateIndex(index, { dataVersion: 'v1' }), { ok: true });
+});
+
+const SHARD_META = metaWith({ files: ['AC48'], versions: { AC48: 's1' } });
+const GOOD_ENTRY = { meta: {}, records: [], invalidRecords: [] };
+const shardOf = (drugs) => ({ shardVersion: 's1', drugs });
+const reasonOf = (shard, code = 'AC48092100') => validateShard(shard, SHARD_META, 'AC48', code);
+
+for (const [name, shard] of [
+  ['陣列', []],
+  ['null', null],
+  ['shardVersion 非字串', { shardVersion: 1, drugs: {} }],
+  ['drugs 為陣列', { shardVersion: 's1', drugs: [] }],
+  ['drugs 為 null', { shardVersion: 's1', drugs: null }],
+]) {
+  test(`validateShard 外層結構不合法 → invalid：${name}`, () => {
+    assert.deepEqual(reasonOf(shard), { ok: false, reason: 'invalid' });
+  });
+}
+
+test('validateShard：沒有該 own key → missing_code（含只在原型鏈上的名稱）', () => {
+  assert.deepEqual(reasonOf(shardOf({})), { ok: false, reason: 'missing_code' });
+  assert.deepEqual(reasonOf(shardOf({ AC48845100: GOOD_ENTRY })), { ok: false, reason: 'missing_code' });
+  assert.deepEqual(reasonOf(shardOf({}), 'toString'), { ok: false, reason: 'missing_code' });
+});
+
+for (const [name, entry] of [
+  ['值為 null', null],
+  ['值為字串', 'x'],
+  ['值為陣列', []],
+  ['records 非陣列', { ...GOOD_ENTRY, records: {} }],
+  ['invalidRecords 非陣列', { ...GOOD_ENTRY, invalidRecords: 'x' }],
+  ['invalidRecords 缺', { meta: {}, records: [] }],
+  ['meta 非物件且 metaVariants 非陣列', { records: [], invalidRecords: [], meta: null, metaVariants: {} }],
+  ['meta 與 metaVariants 都缺', { records: [], invalidRecords: [] }],
+]) {
+  test(`validateShard：own key 存在但條目壞 → invalid_entry，不是 missing_code：${name}`, () => {
+    assert.deepEqual(reasonOf(shardOf({ AC48092100: entry })), { ok: false, reason: 'invalid_entry' });
+  });
+}
+
+test('validateShard：版本比對先於條目檢查；合法條目兩種描述形式皆通過', () => {
+  assert.deepEqual(validateShard({ shardVersion: 's0', drugs: { AC48092100: null } }, SHARD_META, 'AC48', 'AC48092100'),
+    { ok: false, reason: 'version_mismatch' });
+  assert.deepEqual(reasonOf(shardOf({ AC48092100: GOOD_ENTRY })), { ok: true });
+  assert.deepEqual(reasonOf(shardOf({ AC48092100: { metaVariants: [], records: [], invalidRecords: [] } })), { ok: true });
+  assert.deepEqual(reasonOf(shardOf({ AC4809: GOOD_ENTRY }), 'AC4809'), { ok: true });   // 合法英數但非 10 碼：不以長度短路
+});
+
 test('§6.6 metaVariants 依日期選用，不以預告列回填', () => {
   const entry = {
     metaVariants: [{ from: '2020-01-01', chName: '現行名' }, { from: '2026-10-01', chName: '預告名' }],

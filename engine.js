@@ -503,31 +503,54 @@ export function shardPrefix(code, shards) {
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const isNonEmptyStr = (x) => typeof x === 'string' && x !== '';
+
+/**
+ * spec-startup §5.7：shard map 必須可信，「無匹配前綴」才能當作代號不存在的依據。
+ * files 為非空、成員為不重複的非空字串；versions 的 key 集合與 files 相等，值為非空字串。
+ */
 export function validateMeta(meta) {
   if (!isObj(meta) || typeof meta.dataVersion !== 'string' || !isObj(meta.shards)
       || !Array.isArray(meta.shards.files) || !isObj(meta.shards.versions)) {
     return { ok: false, reason: 'invalid' };
   }
+  const { files, versions } = meta.shards;
+  if (files.length === 0 || !files.every(isNonEmptyStr) || new Set(files).size !== files.length) {
+    return { ok: false, reason: 'invalid' };
+  }
+  const keys = Object.keys(versions);
+  if (keys.length !== files.length || !files.every((f) => isNonEmptyStr(versions[f]))) {
+    return { ok: false, reason: 'invalid' };
+  }
   return { ok: true };
 }
 
+/** 必須有 meta 才可能成功：沒有 meta 無從比對版本，比照 validateUpcoming 回 version_mismatch。 */
 export function validateIndex(index, meta) {
   if (!isObj(index) || typeof index.dataVersion !== 'string' || !Array.isArray(index.drugs)) {
     return { ok: false, reason: 'invalid' };
   }
-  if (meta && index.dataVersion !== meta.dataVersion) return { ok: false, reason: 'version_mismatch' };
+  if (!meta || typeof meta.dataVersion !== 'string' || index.dataVersion !== meta.dataVersion) {
+    return { ok: false, reason: 'version_mismatch' };
+  }
   return { ok: true };
 }
 
+/**
+ * reason：'invalid'（外層結構）｜'version_mismatch'｜'missing_code'（drugs 沒有該 own key）
+ * ｜'invalid_entry'（own key 存在但條目結構不合法——不是「查無」，spec-startup D4.1 第 9 列）。
+ */
 export function validateShard(shard, meta, prefix, code) {
   if (!isObj(shard) || typeof shard.shardVersion !== 'string' || !isObj(shard.drugs)) {
     return { ok: false, reason: 'invalid' };
   }
   if (shard.shardVersion !== meta.shards.versions[prefix]) return { ok: false, reason: 'version_mismatch' };
+  if (!hasOwn(shard.drugs, code)) return { ok: false, reason: 'missing_code' };
   const e = shard.drugs[code];
   if (!isObj(e) || !Array.isArray(e.records) || !Array.isArray(e.invalidRecords)
       || !(isObj(e.meta) || Array.isArray(e.metaVariants))) {
-    return { ok: false, reason: 'missing_code' };
+    return { ok: false, reason: 'invalid_entry' };
   }
   return { ok: true };
 }
