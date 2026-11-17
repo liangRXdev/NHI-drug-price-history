@@ -58,11 +58,23 @@ test('正式資料：?code= 在 index 扣住時顯示詳情，內容等於由 sh
   const detail = page.locator('#detail');
   await expect(detail.locator('.detail-head .code')).toHaveText(CODE, { timeout: 30_000 });
   await expect(detail.locator('table.history tbody tr')).toHaveCount(entry.records.length + entry.invalidRecords.length);
-  if (effective.length === 1 && effective[0].priceState === 'priced') {
-    await expect(detail.locator('.metric.key .val')).toContainText(effective[0].rawPrice);
-  } else {
-    await expect(detail.locator('.metric.key .val small')).toHaveCount(0);       // 非有價：不得顯示金額
-  }
+  // 現行價欄的預期分類由 shard 的 records 獨立推導（不經 engine.js；spec.md §5.3、§5.5 的文案）。
+  // 非有價分支只驗「沒有單位」會讓任意錯誤文字通過（codex T2）：逐分類斷言其固定文案。
+  const key = detail.locator('.metric.key .val');
+  const distinct = new Set(effective.map((r) => `${r.priceState}|${r.price}`));
+  const conflict = distinct.size > 1 || effective.some((r) => (r.flags || []).includes('conflicting_price_interval'));
+  const cur = effective[0];
+  const pricedBeforeCur = cur ? entry.records.slice(0, entry.records.indexOf(cur)).some((r) => r.priceState === 'priced') : false;
+  if (conflict) await expect(key).toContainText('來源紀錄衝突，無法判定單一支付價');
+  else if (!cur && today < entry.records[0].from) await expect(key).toContainText('尚未生效');
+  else if (!cur && entry.records.some((r) => r.from > today)) await expect(key).toContainText('此日期無支付紀錄（空窗）');
+  else if (!cur) await expect(key).toContainText('目前無有效支付紀錄');
+  else if (cur.priceState === 'priced') await expect(key).toContainText(`${cur.rawPrice} 元`);
+  else if (cur.priceState === 'terminated') {
+    await expect(key).toContainText(pricedBeforeCur ? '已終止支付（' : '健保支付價 0 元（此前無有價紀錄）');
+  } else if (cur.priceState === 'suspended') await expect(key).toContainText(`暫停支付（來源標示 ${cur.rawPrice}）`);
+  else throw new Error(`smoke 代號 ${CODE} 的現行狀態 ${cur.priceState} 沒有對應的預期文案：請補上分類`);
+  if (!cur || cur.priceState !== 'priced' || conflict) await expect(key.locator('small')).toHaveCount(0);   // 非有價：不得顯示金額
   await expect.poll(() => indexRequests).toBe(1);
   await expect(page.locator('#q')).toBeDisabled();                               // index 仍扣住
 

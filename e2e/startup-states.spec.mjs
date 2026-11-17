@@ -235,6 +235,25 @@ for (const [view, url, loadingSel, loadingText] of [
     await site.expectCountStays('index', 0);
   });
 
+  // M11 的另一條可達路徑：首頁入口已平行啟動 index，meta 未到就導覽到比較／預告（codex T8）
+  test(`S5 M11 ${view}｜meta loading｜index loading（首頁入口後導覽）→ 該視圖現有的載入中，搜尋不可用，index 不重發`, async ({ page }) => {
+    const site = await gatedSite(page, { plan: { meta: 'hold', index: 'hold' } });
+    await page.goto('/');
+    await site.waitHeld('meta');
+    await site.waitHeld('index');
+    await routeTo(page, url.slice(1));
+    await expect(page.locator(loadingSel)).toContainText(loadingText);
+    await expect(q(page)).toBeDisabled();
+    await expect(results(page)).toHaveCount(0);
+    await site.expectCountStays('index', 1);
+    expect(Object.keys(site.data.shards).reduce((n, p) => n + site.count(`shard:${p}`), 0), 'meta 未到不得發 shard').toBe(0);
+    await site.release('meta');
+    if (view === '比較') await expect(page.locator('.cmp-summary')).toBeVisible();
+    else await expect(page.locator('.upcoming-row')).toHaveCount(3);
+    await expect(q(page)).toBeDisabled();                   // index 仍扣住
+    expect(site.count('index'), 'meta 落定後 index 不重發').toBe(1);
+  });
+
   for (const indexState of ['loading', 'error', 'mismatch']) {
     test(`S5 M13 ${view}｜meta ready｜index ${indexState} → 主體照常顯示`, async ({ page }) => {
       const data = buildData();
@@ -254,6 +273,42 @@ for (const [view, url, loadingSel, loadingText] of [
         await expect(page.locator('.cmp-summary thead th .mono')).toHaveText([A, B]);
         await expect(page.locator('#compareTray .tray-name')).toHaveCount(0);      // 未發布：chip 品名為空
       } else await expect(page.locator('.upcoming-row')).toHaveCount(3);
+      // index 未發布：搜尋不可用、無結果節點；請求數（codex T8）
+      await expect(q(page)).toBeDisabled();
+      await expect(results(page)).toHaveCount(0);
+      expect(site.count('meta'), 'meta 請求數').toBe(1);
+      expect(site.count('index'), 'index 請求數').toBe(1);
+    });
+  }
+
+  // M13：該視圖自身的失敗與 index 狀態交叉（「自身狀態機照舊」與 index 互不干擾）
+  for (const indexState of ['loading', 'error']) {
+    test(`S5 M13 ${view}｜meta ready｜自身失敗 × index ${indexState} → 兩者各自顯示，互不覆蓋`, async ({ page }) => {
+      const data = buildData();
+      const plan = { index: indexState === 'loading' ? 'hold' : 500 };
+      if (view === '比較') plan['shard:B009'] = 500;
+      else data.upcoming.dataVersion = 'sha256:other-batch';
+      const site = await gatedSite(page, { data, plan });
+      await page.goto(url);
+      if (view === '比較') {
+        await expect(page.locator('#compareBanner')).toContainText('以下品項的資料載入失敗');
+        await expect(page.locator('#compareBanner')).toContainText(B);
+        await expect(page.locator(`.compare-code[data-code="${A}"]`)).toHaveAttribute('data-status', 'ok');
+      } else {
+        await expect(page.locator('#upcomingBanner')).toContainText(TEXT.coreMismatch);
+        await expect(page.locator('.upcoming-row')).toHaveCount(0);
+      }
+      if (indexState === 'loading') {
+        await site.waitHeld('index');
+        await page.waitForTimeout(SETTLE_MS);
+        await expect(banners(page)).not.toContainText(TEXT.indexError);
+      } else {
+        await expect(banners(page)).toContainText(TEXT.indexError);
+      }
+      await expect(q(page)).toBeDisabled();
+      await expect(results(page)).toHaveCount(0);
+      expect(site.count('meta'), 'meta 請求數').toBe(1);
+      expect(site.count('index'), 'index 請求數').toBe(1);
     });
   }
 }

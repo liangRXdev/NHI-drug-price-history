@@ -218,8 +218,8 @@ async function indexArrivedMetaHeld(page) {
   const site = await gatedSite(page, { plan: { meta: 'hold' } });
   await page.goto('/');
   await site.waitHeld('meta');
-  await site.waitCount('index', 1);
-  await page.waitForTimeout(SETTLE_MS);                     // index 的 200 已送達頁面
+  await site.waitServed('index');                           // index 的 200 已完整送達頁面（不是只發出請求）
+  await page.waitForTimeout(SETTLE_MS);
   await expect(page.locator('#q')).toBeDisabled();
   // 對搜尋框輸入不產生結果（即使繞過 disabled 直接派送 input 事件）
   await page.evaluate((code) => {

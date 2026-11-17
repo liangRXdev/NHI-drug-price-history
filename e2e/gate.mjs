@@ -37,12 +37,20 @@ export async function gatedSite(page, opts = {}) {
   const held = {};
   const slow = {};
   const headers = {};               // 瀏覽器已收到回應 headers 的次數（Playwright 的 response 事件）
+  const served = {};                // 瀏覽器已收完整個回應（body 含）的次數（requestfinished 事件）
   const slowName = {};              // body-slow 改道後，回應事件帶的是替換後的網址，須由 id 對回資源名
-  page.on('response', (res) => {
-    const path = new URL(res.url()).pathname;
+  const resourceOf = (url) => {
+    const path = new URL(url).pathname;
     const m = /\/__slow_body\/([\w-]+)$/.exec(path);
-    const name = m ? slowName[m[1]] : nameOf(path.replace(/^.*\/data\//, ''));
+    return m ? slowName[m[1]] : nameOf(path.replace(/^.*\/data\//, ''));
+  };
+  page.on('response', (res) => {
+    const name = resourceOf(res.url());
     if (name) headers[name] = (headers[name] || 0) + 1;
+  });
+  page.on('requestfinished', (req) => {
+    const name = resourceOf(req.url());
+    if (name) served[name] = (served[name] || 0) + 1;
   });
 
   const defaultBody = (name) => {
@@ -99,11 +107,22 @@ export async function gatedSite(page, opts = {}) {
     async waitHeld(name, n = 1) {
       await expect.poll(() => (held[name] || []).length, { message: `等待 ${name} 被扣住` }).toBeGreaterThanOrEqual(n);
     },
-    /** 放行所有被扣住的該資源請求。 */
+    /**
+     * 放行所有被扣住的該資源請求。行為會完整回應時（非 hold／pending／body-stall／body-slow），
+     * 等到瀏覽器實際收完這些回應才返回：解開攔截器不代表 app 已拿到回應，之後的「仍然如何」斷言
+     * 若從解開時起算，慢機器上可能在回應抵達前就先通過（codex T5）。
+     */
     async release(name, behavior = 'ok') {
       await ctl.waitHeld(name);
       const list = held[name].splice(0);
+      const before = served[name] || 0;
       for (const resolve of list) resolve(behavior);
+      const open = ['hold', 'pending', 'body-stall', 'body-slow'].includes(behavior);
+      if (!open) await ctl.waitServed(name, before + list.length);
+    },
+    /** 等到瀏覽器已收完該資源第 n 個回應。 */
+    async waitServed(name, n = 1) {
+      await expect.poll(() => served[name] || 0, { message: `等待 ${name} 的回應收完` }).toBeGreaterThanOrEqual(n);
     },
     /** 等到瀏覽器已收到該資源第 n 次回應的 headers（body 可能尚未收完）。 */
     async waitHeaders(name, n = 1) {
@@ -154,10 +173,20 @@ export const everSaid = (page, text) => page.evaluate((t) => {
 export async function trackIndexLeak(page) {
   await page.addInitScript(() => {
     window.__leak = { result: false, link: false, trayName: false };
-    const check = () => {
-      if (document.querySelector('#results .result')) window.__leak.result = true;
-      if (document.querySelector('#results a[href*="code="]')) window.__leak.link = true;
-      if (document.querySelector('#compareTray .tray-name')) window.__leak.trayName = true;
+    const RULES = [['result', '#results .result'], ['link', '#results a[href*="code="]'], ['trayName', '#compareTray .tray-name']];
+    // 除了回呼當下的 DOM，也檢查每筆 MutationRecord 的新增節點（含子樹）：同一個 task 內插入又移除的
+    // 節點，回呼時已不在文件中，只看當下 DOM 會漏掉（codex T6）。新增節點已脫離文件時，以其原父節點判斷位置。
+    const hit = (node, sel, parent) => {
+      if (node.nodeType !== 1) return false;
+      const [scope, leaf] = sel.split(' ');
+      const inScope = node.closest?.(scope) || parent?.closest?.(scope) || node.matches?.(scope);
+      return Boolean(inScope && (node.matches(leaf) || node.querySelector(leaf)));
+    };
+    const check = (list = []) => {
+      for (const [k, sel] of RULES) if (document.querySelector(sel)) window.__leak[k] = true;
+      for (const m of list) {
+        for (const n of m.addedNodes) for (const [k, sel] of RULES) if (hit(n, sel, m.target)) window.__leak[k] = true;
+      }
     };
     new MutationObserver(check).observe(document, { subtree: true, childList: true, characterData: true });
   });

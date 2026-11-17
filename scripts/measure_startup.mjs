@@ -98,19 +98,27 @@ function probe(cfg) {
       if (!view || view.hidden || !sum || !table || !btn) return;
       started = true;
       obs.disconnect();
-      const box = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const box = (el) => { const r = el?.getBoundingClientRect(); return Boolean(r && r.width > 0 && r.height > 0); };
       void document.getElementById('detail').offsetHeight;          // 強制 layout
-      if (!box(sum) || !box(table)) { m.detailError = '摘要或歷史表不可見'; return; }
+      // 摘要區整體（標題所在的卡片與其中的指標區）都須可見，不只標題（codex C6）
+      const sumCard = sum.closest('section');
+      const metrics = sumCard?.querySelector('.results');
+      if (!box(sumCard) || !box(metrics) || !metrics.querySelector('.metric.key') || !box(table)) {
+        m.detailError = '摘要區或歷史表不可見'; return;
+      }
       const rows = table.querySelectorAll('tbody tr').length;
       const before = firstDate();
       const pressedBefore = btn.getAttribute('aria-pressed');
+      if (pressedBefore !== 'true' && pressedBefore !== 'false') { m.detailError = `排序前 aria-pressed 非 true/false：${pressedBefore}`; return; }
       if (rows !== cfg.rows || before !== cfg.newest) { m.detailError = `排序前不符：rows=${rows} first=${before}`; return; }
       btn.click();
       await raf2();
       const after = firstDate();
       const pressedAfter = document.querySelector('#detail [data-action="toggle-sort"]')?.getAttribute('aria-pressed');
       const rowsAfter = document.querySelectorAll('#detail table.history tbody tr').length;
-      if (after !== cfg.oldest || rowsAfter !== cfg.rows || pressedAfter === pressedBefore) {
+      // 翻轉＝明確的 true↔false 反值；屬性被移除（null）或其他值不算（codex C6）
+      const flipped = pressedAfter === (pressedBefore === 'true' ? 'false' : 'true');
+      if (after !== cfg.oldest || rowsAfter !== cfg.rows || !flipped) {
         m.detailError = `排序後不符：first=${after} rows=${rowsAfter} pressed=${pressedBefore}→${pressedAfter}`;
         return;
       }
@@ -161,8 +169,9 @@ async function runDetail(side, code, exp) {
     await page.waitForFunction(() => window.__m && (window.__m.detail !== null || window.__m.detailError !== null), null, { timeout: 180_000 });
     await page.waitForFunction(() => window.__m.searchReady !== null, null, { timeout: 180_000 });
     const m = await page.evaluate(() => window.__m);
-    if (m.detailError) return { invalid: m.detailError };
-    if (!m.searchReadyEnabled) return { invalid: 'search-ready 時搜尋框仍停用' };
+    const got = { detail: m.detail, searchReady: m.searchReady };    // 無效樣本也保留已取得的數值（§7 記錄）
+    if (m.detailError) return { invalid: m.detailError, ...got };
+    if (!m.searchReadyEnabled) return { invalid: 'search-ready 時搜尋框仍停用', ...got };
     // 事後驗證（不計時）：mark 屬實＝切到搜尋頁後固定查詢在 300 ms 內得到預期首筆
     const ok = await page.evaluate(async (q) => {
       history.pushState(null, '', './');
@@ -178,10 +187,11 @@ async function runDetail(side, code, exp) {
       }
       return false;
     }, QUERY);
-    if (!ok) return { invalid: 'search-ready 不實：300 ms 內未得到預期首筆' };
-    return { detail: m.detail, searchReady: m.searchReady };
+    if (!ok) return { invalid: 'search-ready 不實：300 ms 內未得到預期首筆', ...got };
+    return got;
   } catch (e) {
-    return { invalid: `逾時或例外：${e.message.split('\n')[0]}` };
+    const partial = await page.evaluate(() => window.__m && { detail: window.__m.detail, searchReady: window.__m.searchReady }).catch(() => null);
+    return { invalid: `逾時或例外：${e.message.split('\n')[0]}`, ...(partial || {}) };
   } finally {
     await ctx.close();
   }
@@ -194,7 +204,8 @@ async function runHome(side) {
     await page.waitForFunction(() => window.__m && window.__m.home !== null, null, { timeout: 180_000 });
     return { home: await page.evaluate(() => window.__m.home) };
   } catch (e) {
-    return { invalid: `逾時或例外：${e.message.split('\n')[0]}` };
+    const home = await page.evaluate(() => window.__m?.home ?? null).catch(() => null);
+    return { invalid: `逾時或例外：${e.message.split('\n')[0]}`, home };
   } finally {
     await ctx.close();
   }
@@ -206,12 +217,14 @@ const round = (x) => Math.round(x * 10) / 10;
 async function block(index, exp) {
   const order = ORDERS[index % 2];
   const out = { index, order: order.join(''), detail: {}, home: null, voided: [] };
+  const val = (x) => (typeof x === 'number' ? round(x) : null);
   for (const code of CODES) {
     const raw = { A: [], B: [] };
+    out.detail[code] = { raw };                      // 先掛上：作廢時已取得的樣本（含無效那次）照樣留在記錄裡（§7）
     for (const side of order) {
       const r = await runDetail(side, code, exp[code]);
+      raw[side].push({ detail: val(r.detail), searchReady: val(r.searchReady), ...(r.invalid ? { invalid: r.invalid } : {}) });
       if (r.invalid) return { void: `${code}/${side}: ${r.invalid}`, partial: out };
-      raw[side].push({ detail: round(r.detail), searchReady: round(r.searchReady) });
     }
     const med = (side, k) => median(raw[side].map((x) => x[k]));
     out.detail[code] = {
@@ -221,9 +234,13 @@ async function block(index, exp) {
     };
   }
   const raw = { A: [], B: [] };
+  out.home = { raw };
   for (const side of order) {
     const r = await runHome(side);
-    if (r.invalid) return { void: `home/${side}: ${r.invalid}`, partial: out };
+    if (r.invalid) {
+      raw[side].push({ home: val(r.home), invalid: r.invalid });
+      return { void: `home/${side}: ${r.invalid}`, partial: out };
+    }
     raw[side].push(round(r.home));
   }
   out.home = { raw, degradation: round(median(raw.B) - median(raw.A)) };            // 正值＝B 較慢
