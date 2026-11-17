@@ -167,4 +167,14 @@ T4 的工具修正未做變異驗證（需要能在 headers 抵達時就啟動 i
 
 全套：pytest 367／node 315／e2e **321** passed。
 
-**仍未處理**：C1、C3（第 4 步）；T8、T5、T6、T2、C5、C6（第 5 步）。§7 表中 S5、S5b、S11、S12、S14 的 ⚠️ 維持；S4、S6、S9、S13 待使用者確認後可改回 ✅。
+### 7.2 第 4 步（2026-11-17）
+
+| 項目 | 處置 | 證據 |
+|---|---|---|
+| C1 | 新增 `output_routing_errors(files, shard_map)`：解析 `render()` 產出的**待發布 bytes** 再核對路由；另核對 shard map 與實際 history 檔一一對應、每片 `shardVersion` 等於 map 記載。shard map 在守門前只組一次，守門與 `meta.json` 共用同一份 | `tests/test_build.py`：`test_s14_routing_guard_checks_rendered_bytes`（四種序列化層污染：漏碼、碼寫進錯片、檔名錯、版本不符 × `allow_anomaly`，皆非零結束且既有 `data/` 位元組不變）、`test_s14_meta_shard_map_is_the_one_the_guard_checked`。新測試在舊守門下 8 支全紅 |
+| C3 | JS 讀同一份 `tests/fixtures/shard_routing_cases.json`，逐筆斷言正序與反序 | `tests-js/engine.test.mjs`「S14 shardPrefix 對共同 fixture … 正序與反序皆同」。把 `shardPrefix` 改成「取第一個匹配前綴」時此測試失敗 |
+
+現行 `data/` 全量核對（新守門、唯讀）：348 片、45,224 碼，0 錯誤，耗時 3.4 秒（build 增加的成本）。
+全套：pytest **376**／node **316**／e2e 321 passed。
+
+**仍未處理**：T8、T5、T6、T2、C5、C6（第 5 步）。§7 表中 S5、S5b、S11、S12 的 ⚠️ 維持；S4、S6、S9、S13、S14 待使用者確認後可改回 ✅。

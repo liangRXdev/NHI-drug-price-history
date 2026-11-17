@@ -249,16 +249,17 @@ def longest_prefix(code, prefixes):
     return best
 
 
-def routing_errors(shards, index_drugs, limit=5):
+def routing_errors(shards, index_drugs, limit=5, prefixes=None):
     """前端依 shard map 找得到每個代號（spec-startup §5.6）。→ 錯誤訊息清單。
 
     詳情頁的「查無此代號」由 shard 判定，因此必須保證：index 的每個代號恰好存在於一片，
     且該片正是以**同一份** shard map 做最長前綴比對所選中的那片；每片內的代號都在 index 內。
     只比代號聯集不夠——放錯片或重複於兩片都不會改變聯集。不屬語意異常，不可人工放行。
+    `prefixes`：選片所用的 shard map 清單；省略時取 shards 的鍵。
     """
-    prefixes = sorted(shards)
+    prefixes = sorted(shards) if prefixes is None else sorted(prefixes)
     located = {}
-    for p in prefixes:
+    for p in sorted(shards):
         for code in shards[p]:
             located.setdefault(code, []).append(p)
     index_codes = [d["code"] for d in index_drugs]
@@ -275,6 +276,42 @@ def routing_errors(shards, index_drugs, limit=5):
     }
     return [f"shard 路由不一致——{label} {len(codes):,} 個（例：{', '.join(codes[:limit])}）"
             for label, codes in problems.items() if codes]
+
+
+def output_routing_errors(files, shard_map, limit=5):
+    """對**待發布的 bytes** 與**同一份** shard map 核對路由（spec-startup §5.6「對實際產出」）。
+
+    `files` 是 render() 的產物（即將寫入的位元組），`shard_map` 是即將寫進 meta.json 的那一份。
+    不看建置中間的 dict：序列化若漏碼、檔名錯或碼寫進錯片，模型仍正確，只有產物看得出來（codex C1）。
+    前端只認 meta 的 shard map 與實際檔案，因此另核對：map 列出的片與實際 history 檔一一對應、
+    每片的 shardVersion 等於 map 記載的版本。
+    """
+    shards = {}
+    errors = []
+    for path, data in files.items():
+        if not (path.startswith("history/") and path.endswith(".json")):
+            continue
+        p = path[len("history/"):-len(".json")]
+        try:
+            shards[p] = json.loads(data)
+        except ValueError:
+            errors.append(f"shard 路由不一致——產物不是有效 JSON：{path}")
+    try:
+        index_drugs = json.loads(files["drug_index.json"])["drugs"]
+    except (KeyError, ValueError, TypeError):
+        return errors + ["shard 路由不一致——drug_index.json 產物不是有效的 index"]
+
+    listed = set(shard_map["files"])
+    only_map = sorted(listed - set(shards))
+    only_file = sorted(set(shards) - listed)
+    if only_map or only_file:
+        errors.append(f"shard 路由不一致——shard map 與實際 history 檔不對應（只在 map：{', '.join(only_map[:limit]) or '無'}；"
+                      f"只有檔案：{', '.join(only_file[:limit]) or '無'}）")
+    stale = sorted(p for p in listed & set(shards) if shards[p].get("shardVersion") != shard_map["versions"].get(p))
+    if stale:
+        errors.append(f"shard 路由不一致——shardVersion 與 shard map 記載不符 {len(stale):,} 片（例：{', '.join(stale[:limit])}）")
+    drugs = {p: s.get("drugs") or {} for p, s in shards.items() if isinstance(s, dict)}
+    return errors + routing_errors(drugs, index_drugs, limit=limit, prefixes=shard_map["files"])
 
 
 def blank_rate_checks(stats, prev_meta, cfg):
@@ -405,6 +442,8 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
     versions = shard_versions(shards)
     version = data_version(versions)
     files = render(shards, index_drugs, versions, version)
+    # 只組一次：守門核對的與寫進 meta.json 的必須是同一份（spec-startup §5.6）
+    shard_map = {"prefixLength": PREFIX_LENGTH, "files": sorted(shards), "versions": versions}
     upcoming = upcoming_payload(upcoming_items, version, build_date)
     upcoming_errors = history.validate_upcoming(upcoming)
     upcoming_bytes = dumps(upcoming)
@@ -419,7 +458,7 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
         stats, prev_meta, prev_codes, new_codes, shard_files, cfg, allow_anomaly,
         upcoming_errors=upcoming_errors, upcoming_bytes=upcoming_bytes,
         index_bytes=files["drug_index.json"])
-    errors += routing_errors(shards, index_drugs)      # 不經 allow_anomaly（spec-startup §5.6）
+    errors += output_routing_errors(files, shard_map)  # 對待發布的 bytes；不經 allow_anomaly（spec-startup §5.6）
     warnings += golden_rewrites(shards, fixtures_dir)
     if errors:
         raise BuildError(errors, warnings)
@@ -447,8 +486,7 @@ def run(raw, *, data_dir, build_date, checked_at, source_modified,
             "dataVersion": version,
             "generatedAt": checked_at,
             "source": nhi.SOURCE_ID,
-            "shards": {"prefixLength": PREFIX_LENGTH, "files": sorted(shards),
-                       "versions": versions},
+            "shards": shard_map,
             **{k: stats.get(k, 0) for k in (
                 "sourceRowCount", "uniqueDrugCodeCount", "recordCount", "invalidRecords",
                 "blankCodeRows", "malformedPriceRows", "missingPriceRows",

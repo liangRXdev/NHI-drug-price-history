@@ -1,6 +1,7 @@
 // C1–C4、C2、E1–E2、E6 的純邏輯斷言（plan.md §5）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   chartModel, currentLabel, dayNumber, decimalChange, isEffective, latestEventLabel, MAX_RESULTS, prepareIndex,
@@ -461,6 +462,17 @@ test('shardPrefix 以最長符合前綴選檔，不寫死長度', () => {
   assert.equal(shardPrefix('AC48092100', shards), 'AC4809');
   assert.equal(shardPrefix('AC48867100', shards), 'AC48');
   assert.equal(shardPrefix('ZZ00000000', shards), null);
+});
+
+// S14：與 Python 端 longest_prefix 讀**同一份** fixture，各自對其中的獨立預期值（codex C3）。
+// 反序再驗一次：取第一個匹配前綴的實作在反序時會答錯。
+test('S14 shardPrefix 對共同 fixture（tests/fixtures/shard_routing_cases.json）的每筆預期歸屬，正序與反序皆同', () => {
+  const routing = JSON.parse(readFileSync(new URL('../tests/fixtures/shard_routing_cases.json', import.meta.url), 'utf8'));
+  assert.ok(routing.cases.length >= 5);
+  for (const c of routing.cases) {
+    assert.equal(shardPrefix(c.code, { files: routing.files }), c.expect, c.code);
+    assert.equal(shardPrefix(c.code, { files: [...routing.files].reverse() }), c.expect, `${c.code}（反序）`);
+  }
 });
 
 test('E6 混批：index↔meta、shard↔meta 版本不一致 → version_mismatch', () => {

@@ -843,6 +843,78 @@ def test_s14_untampered_build_has_no_routing_errors(tmp_path):
     rows = nhi.parse_csv(SNAPSHOT.read_bytes())
     shards, index, _, _ = bph.build_outputs(rows, D)
     assert bph.routing_errors(shards, index) == []
+    versions = bph.shard_versions(shards)
+    files = bph.render(shards, index, versions, bph.data_version(versions))
+    shard_map = {"prefixLength": bph.PREFIX_LENGTH, "files": sorted(shards), "versions": versions}
+    assert bph.output_routing_errors(files, shard_map) == []
+
+
+# 序列化層的缺陷：建置中間的 dict 完全正確，只有待發布的 bytes 是錯的（codex C1）。
+# 守門若只看模型，這四種都會放行。
+def _render_drop_code(files):
+    path = sorted(k for k in files if k.startswith("history/"))[0]
+    obj = json.loads(files[path])
+    obj["drugs"].pop(sorted(obj["drugs"])[0])
+    files[path] = bph.dumps(obj)
+
+
+def _render_wrong_file(files):
+    src, dst = sorted(k for k in files if k.startswith("history/"))[:2]
+    a, b = json.loads(files[src]), json.loads(files[dst])
+    code = sorted(a["drugs"])[0]
+    b["drugs"][code] = a["drugs"].pop(code)
+    files[src], files[dst] = bph.dumps(a), bph.dumps(b)
+
+
+def _render_rename_file(files):
+    path = sorted(k for k in files if k.startswith("history/"))[0]
+    files[path.replace("history/", "history/X")] = files.pop(path)
+
+
+def _render_stale_version(files):
+    path = sorted(k for k in files if k.startswith("history/"))[0]
+    obj = json.loads(files[path])
+    obj["shardVersion"] = "sha256:not-in-map"
+    files[path] = bph.dumps(obj)
+
+
+RENDER_TAMPERS = {
+    "drop_code": (_render_drop_code, "index 有而任何 shard 都沒有"),
+    "wrong_file": (_render_wrong_file, "代號不在最長前綴所選的片"),
+    "rename_file": (_render_rename_file, "shard map 與實際 history 檔不對應"),
+    "stale_version": (_render_stale_version, "shardVersion 與 shard map 記載不符"),
+}
+
+
+@pytest.mark.parametrize("allow_anomaly", [False, True])
+@pytest.mark.parametrize("kind", sorted(RENDER_TAMPERS))
+def test_s14_routing_guard_checks_rendered_bytes(tmp_path, monkeypatch, kind, allow_anomaly):
+    build(tmp_path)
+    before = tree_hash(tmp_path)
+    tamper, label = RENDER_TAMPERS[kind]
+    original = bph.render
+
+    def tampered(*args):
+        files = original(*args)
+        tamper(files)
+        return files
+
+    monkeypatch.setattr(bph, "render", tampered)
+    with pytest.raises(BuildError) as e:
+        build(tmp_path, checked_at="2026-09-18T02:00:00+08:00", allow_anomaly=allow_anomaly)
+    assert [m for m in e.value.args[0] if "shard 路由不一致" in m and label in m], e.value.args[0]
+    assert tree_hash(tmp_path) == before
+
+
+def test_s14_meta_shard_map_is_the_one_the_guard_checked(tmp_path):
+    """寫進 meta.json 的 shard map 必須與實際 history 檔一一對應、版本相符（守門與 meta 用同一份）。"""
+    build(tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    on_disk = sorted(p.stem for p in (tmp_path / "history").glob("*.json"))
+    assert meta["shards"]["files"] == on_disk
+    for p in on_disk:
+        shard = json.loads((tmp_path / "history" / f"{p}.json").read_text(encoding="utf-8"))
+        assert shard["shardVersion"] == meta["shards"]["versions"][p]
 
 
 @pytest.mark.parametrize("case", ROUTING["cases"], ids=lambda c: c["code"])
