@@ -85,7 +85,7 @@ NB01043100 4,605.0→1,129.6／4,611.7→1,144.9／4,974.5→1,311.0／5,303.2�
 | S14 | ✅ | `tests/test_build.py`：`test_s14_routing_guard_fails_publish_and_writes_nothing`（四種注入 × `allow_anomaly`）、`test_s14_longest_prefix_matches_independent_expectation`、`test_s14_routing_guard_honours_nested_prefixes`。實際資料的證據依規格為排程 build 本身，**合併後首次排程 build 尚未發生** |
 | S15 | ✅ | pytest／`npm test`／`npm run e2e`；`e2e/real-data.spec.mjs`「正式資料：?code= 在 index 扣住時顯示詳情，內容等於由 shard 獨立算出的預期值；放行後可搜尋」 |
 | S16 | ⚠️ | 自動部分 ✅：`tests-js/sw.test.mjs`「S16 sw.js：CACHE 值與基準不同」「…PREFIX、SHELL 清單、data/ 旁路判斷式與基準逐字相同」「…除 CACHE 一行外…」。**人工部分（已安裝舊版的裝置取得新版外殼，§8.2）未執行** |
-| S17 | ⏳ | 部署後才能量（線上 GitHub Pages）。未執行 |
+| S17 | 已記錄（不設門檻） | `scripts/measure_returning.mjs` 對線上 GitHub Pages（`b6e246c` 部署後），原始數據 `.ai-review/startup-s17.json`，摘要見 §9 |
 
 ## 3. S6 的 §8.1 類別覆蓋
 
@@ -120,7 +120,7 @@ S15 判定：✅（real-data smoke 為上表 e2e 之一）。
 
 - ~~§8.2 藥師目檢~~：已執行（2026-11-17），5 碼全部一致，見 §8。
 - §8.2 手機實機 deep link 與舊版外殼更新（S16 人工部分）。本機伺服器只聽 127.0.0.1，且「舊版裝置取得新外殼」須部署後才有意義——**合併部署後執行**。
-- S17 線上回頭客量測（部署後）。
+- ~~S17 線上回頭客量測~~：已執行（2026-11-17），見 §9。
 - S14 的實際資料證據（合併後首次排程 build）。
 - ~~§9 step 8 `/codex-review`~~：已執行（2026-11-17），見 §7。
 
@@ -212,3 +212,29 @@ T5 只能證明「斷言從回應送達起算」，無法以變異驗證時序�
 | BC23603100 | 心達舒錠 10 毫克 | **有預告（終止）** | 4.08 元，2026-12-01 起終止；調價 9 次；11 筆 | 一致 |
 
 §8.2 條件：≥ 5 碼 ✅、≥ 1 已終止 ✅（BC17125100）、≥ 1 有預告 ✅（BC22154100、BC23603100）。
+
+## 9. S17 回頭客量測（2026-11-17，只記錄）
+
+- **對象**：線上 GitHub Pages，`main` `b6e246c`（PR #21）部署後；`dataVersion` `sha256:a81eb238…`；Chromium 158.0.8127.18。
+- **方法**：`node scripts/measure_returning.mjs --reps 3`。每次開新 browser context：首訪載入並等 index 發布 → 同一 context 重新導覽同一網址（回訪）。
+  無 CPU／網路節流、實際網路、Service Worker 啟用（回訪時每次皆已受 SW 控制）。代號 `AC49155265`（最大片，與 S1 相同）。
+- **終點**：`?code=`＝摘要卡片與歷史表可見且列數等於 shard（**不含**點排序，與 S1 的終點不同，兩者數字不可互比）；首頁＝固定查詢的結果首筆等於該代號。
+
+| 入口 | 首訪（3 次） | 回訪（3 次） |
+|---|---|---|
+| `?code=` 詳情可見 | 4,184.8／829.4／699.3 ms | 1,710.6／354.5／323.8 ms |
+| 首頁 可搜尋 | 1,337.5／1,439.4／1,515.1 ms | 381.0／388.0／398.4 ms |
+
+| 資料檔 | 首訪實際傳輸 | 回訪實際傳輸 | 解碼後大小 |
+|---|---|---|---|
+| `drug_index.json` | 約 3.43 MB | 75–142 B | 30.29 MB |
+| `history/AC49.json` | 約 142.7 KB | 113–156 B | 1.47 MB |
+| `meta.json` | 約 16.6 KB | 115–158 B | 31.3 KB |
+| `status.json` | 361–494 B | 88–172 B | 205 B |
+
+觀察（事實）：
+- 回訪時所有 `data/` 檔 CDP 回報狀態 200、`fromServiceWorker: false`、`fromDiskCache: false`，實際傳輸只有 75–172 B（標頭量級）、解碼後為完整大小——即以條件式請求重新驗證後沿用 HTTP 快取（app 以 `cache: 'no-cache'` 抓取）。`data/` 未經 Service Worker，符合 `sw.js` 的設計（前提 3）。
+- 第 1 次首訪（4,184.8 ms）明顯慢於第 2、3 次（829.4／699.3 ms）。各 context 的瀏覽器快取彼此獨立，推論（未驗證）為 CDN 邊緣節點或 DNS／連線層的暖機差異，不是 app 行為。
+- 回訪的 `?code=` 第 1 次 1,710.6 ms 同樣偏高，與該 context 首訪偏慢同一來源的可能性高（推論）。
+
+不設門檻，無判定。
