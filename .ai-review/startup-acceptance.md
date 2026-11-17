@@ -84,7 +84,7 @@ NB01043100 4,605.0→1,129.6／4,611.7→1,144.9／4,974.5→1,311.0／5,303.2�
 | S13 | ✅ | `e2e/startup-deeplink.spec.mjs` 7 支「S13 …」（兩個有效代號、`?view=upcoming`、兩種主要資源失敗、預告零 mutation、比較零 mutation＋chip 品名、`selectMeta` 回 null 的合成代號） |
 | S14 | ✅ | `tests/test_build.py`：`test_s14_routing_guard_fails_publish_and_writes_nothing`（四種注入 × `allow_anomaly`）、`test_s14_longest_prefix_matches_independent_expectation`、`test_s14_routing_guard_honours_nested_prefixes`。實際資料的證據依規格為排程 build 本身，**合併後首次排程 build 尚未發生** |
 | S15 | ✅ | pytest／`npm test`／`npm run e2e`；`e2e/real-data.spec.mjs`「正式資料：?code= 在 index 扣住時顯示詳情，內容等於由 shard 獨立算出的預期值；放行後可搜尋」 |
-| S16 | ⚠️ | 自動部分 ✅：`tests-js/sw.test.mjs`「S16 sw.js：CACHE 值與基準不同」「…PREFIX、SHELL 清單、data/ 旁路判斷式與基準逐字相同」「…除 CACHE 一行外…」。**人工部分（已安裝舊版的裝置取得新版外殼，§8.2）未執行** |
+| S16 | ✅ | 自動部分 ✅：`tests-js/sw.test.mjs`「S16 sw.js：CACHE 值與基準不同」「…PREFIX、SHELL 清單、data/ 旁路判斷式與基準逐字相同」「…除 CACHE 一行外…」。人工部分 ✅：使用者 2026-11-17 以先前開過舊版的手機確認 Cache Storage 只有 `nhi-price-shell-v4`（無 v3）、SW `activated`，見 §10 |
 | S17 | 已記錄（不設門檻） | `scripts/measure_returning.mjs` 對線上 GitHub Pages（`b6e246c` 部署後），原始數據 `.ai-review/startup-s17.json`，摘要見 §9 |
 
 ## 3. S6 的 §8.1 類別覆蓋
@@ -119,7 +119,7 @@ S15 判定：✅（real-data smoke 為上表 e2e 之一）。
 ## 5. 尚未執行的項目（不得視為已驗）
 
 - ~~§8.2 藥師目檢~~：已執行（2026-11-17），5 碼全部一致，見 §8。
-- §8.2 手機實機 deep link 與舊版外殼更新（S16 人工部分）。本機伺服器只聽 127.0.0.1，且「舊版裝置取得新外殼」須部署後才有意義——**合併部署後執行**。
+- ~~§8.2 手機實機（S16 人工部分）~~：已執行（2026-11-17），通過，見 §10。
 - ~~S17 線上回頭客量測~~：已執行（2026-11-17），見 §9。
 - S14 的實際資料證據（合併後首次排程 build）。
 - ~~§9 step 8 `/codex-review`~~：已執行（2026-11-17），見 §7。
@@ -193,7 +193,7 @@ T5 只能證明「斷言從回應送達起算」，無法以變異驗證時序�
 全套：pytest 376／node 316／e2e **327** passed。
 
 判定書所列項目已全數處理；§7 表中各條已依使用者 2026-11-17 裁定改回 ✅。
-**仍不得視為已驗**（未執行，非文件措辭問題）：S16 人工部分與 §8.2 手機實機、S17 線上量測、S14 的實際資料證據（合併後首次排程 build）。見 §5。
+**仍不得視為已驗**（未執行，非文件措辭問題）：S14 的實際資料證據（合併後首次排程 build）。見 §5。S16 人工部分見 §10，S17 見 §9。
 
 ## 8. §8.2 藥師目檢（2026-11-17）
 
@@ -238,3 +238,17 @@ T5 只能證明「斷言從回應送達起算」，無法以變異驗證時序�
 - 回訪的 `?code=` 第 1 次 1,710.6 ms 同樣偏高，與該 context 首訪偏慢同一來源的可能性高（推論）。
 
 不設門檻，無判定。
+
+## 10. S16 人工部分／§8.2 手機實機（2026-11-17）
+
+- **執行者**：使用者，手機實機，線上 GitHub Pages（`main` `abf6d53` 部署後）。
+- **方法**：開站後於網址列執行 `caches.keys()` 與 `navigator.serviceWorker.getRegistration()`，以對話框顯示 Cache Storage 名稱與 SW 狀態。
+- **結果（使用者回報）**：
+  - 該裝置在本次部署前**開過舊版**（符合 S16「已安裝舊版的裝置」前提）。
+  - Cache Storage 有 `nhi-price-shell-v4`，**沒有** `nhi-price-shell-v3`（舊版快取已由 activate 清除）。
+  - SW 狀態 `activated`。
+- **判定**：S16 人工部分 ✅（§8.2「該裝置先前已安裝或開過舊版，確認取得新版」）。
+
+未執行（非規格要求，屬額外建議）：飛航模式下重新整理 deep link，確認外殼可從 v4 快取載入。
+
+設計背景：`sw.js` 為 network-first，連網時一律取得線上最新檔案，SW 快取只在離線時使用；故「取得新版外殼」的可觀察證據是快取名稱換成 v4。
