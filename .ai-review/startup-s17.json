@@ -1,0 +1,436 @@
+{
+  "measuredAt": "2026-11-17T02:54:39.907Z",
+  "base": "https://liangrxdev.github.io/NHI-drug-price-history/",
+  "code": "AC49155265",
+  "browser": "158.0.8127.18",
+  "dataVersion": "sha256:a81eb238afe9cc84b9ba71436785f1627840b36ccecb8a5e5d8cea63a77b244f",
+  "conditions": "無節流、實際網路、SW 啟用、每次新 context",
+  "runs": [
+    {
+      "entry": "code",
+      "rep": 0,
+      "first": {
+        "endMs": 4184.8,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 494
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 16722
+          },
+          {
+            "url": "data/history/AC49.json",
+            "decoded": 1474406,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 142661
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 3428275
+          }
+        ]
+      },
+      "returning": {
+        "endMs": 1710.6,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 115
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 158
+          },
+          {
+            "url": "data/history/AC49.json",
+            "decoded": 1474406,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 156
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 76
+          }
+        ]
+      },
+      "swControlled": true
+    },
+    {
+      "entry": "code",
+      "rep": 1,
+      "first": {
+        "endMs": 829.4,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 479
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 16611
+          },
+          {
+            "url": "data/history/AC49.json",
+            "decoded": 1474406,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 142763
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 3428358
+          }
+        ]
+      },
+      "returning": {
+        "endMs": 354.5,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 136
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 140
+          },
+          {
+            "url": "data/history/AC49.json",
+            "decoded": 1474406,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 113
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 75
+          }
+        ]
+      },
+      "swControlled": true
+    },
+    {
+      "entry": "code",
+      "rep": 2,
+      "first": {
+        "endMs": 699.3,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 478
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 16611
+          },
+          {
+            "url": "data/history/AC49.json",
+            "decoded": 1474406,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 142762
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 3428393
+          }
+        ]
+      },
+      "returning": {
+        "endMs": 323.8,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 137
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 141
+          },
+          {
+            "url": "data/history/AC49.json",
+            "decoded": 1474406,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 114
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 87
+          }
+        ]
+      },
+      "swControlled": true
+    },
+    {
+      "entry": "home",
+      "rep": 0,
+      "first": {
+        "endMs": 1337.5,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 441
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 3428458
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 16612
+          }
+        ]
+      },
+      "returning": {
+        "endMs": 381,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 133
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 142
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 135
+          }
+        ]
+      },
+      "swControlled": true
+    },
+    {
+      "entry": "home",
+      "rep": 1,
+      "first": {
+        "endMs": 1439.4,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 361
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 3428367
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 16708
+          }
+        ]
+      },
+      "returning": {
+        "endMs": 388,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 88
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 119
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 115
+          }
+        ]
+      },
+      "swControlled": true
+    },
+    {
+      "entry": "home",
+      "rep": 2,
+      "first": {
+        "endMs": 1515.1,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 441
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 3428461
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 16612
+          }
+        ]
+      },
+      "returning": {
+        "endMs": 398.4,
+        "data": [
+          {
+            "url": "data/status.json",
+            "decoded": 205,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 172
+          },
+          {
+            "url": "data/drug_index.json",
+            "decoded": 30290702,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 93
+          },
+          {
+            "url": "data/meta.json",
+            "decoded": 31328,
+            "status": 200,
+            "fromDiskCache": false,
+            "fromServiceWorker": false,
+            "transferred": 150
+          }
+        ]
+      },
+      "swControlled": true
+    }
+  ]
+}
