@@ -119,11 +119,26 @@ function settleIndex(r) {
       state.indexState = 'error';
       state.indexError = new LoadError('invalid', 'drug_index.json 內容不合法');
     } else {
-      state.prepared = E.prepareIndex(r.index.drugs);
-      state.byCode = new Map(r.index.drugs.map((d) => [d.code, d]));
-      state.indexState = 'ready';
-      state.indexError = null;
-      published = true;
+      // validateIndex 只驗外層：條目損毀（例如 drugs 含 null）會在轉換時拋錯。先在區域變數完成轉換，
+      // 成功才一次發布；失敗歸為 index error（保留主體、提供重試），不得讓例外逃出而停在 loading（codex R1）
+      let prepared;
+      let byCode;
+      try {
+        prepared = E.prepareIndex(r.index.drugs);
+        byCode = new Map(r.index.drugs.map((d) => [d.code, d]));
+      } catch {
+        prepared = null;
+      }
+      if (prepared) {
+        state.prepared = prepared;
+        state.byCode = byCode;
+        state.indexState = 'ready';
+        state.indexError = null;
+        published = true;
+      } else {
+        state.indexState = 'error';
+        state.indexError = new LoadError('invalid', 'drug_index.json 內容不合法');
+      }
     }
   }
   renderBanners();
@@ -554,7 +569,13 @@ function applyIndexToCurrentView() {
     return;
   }
   if ($('compareView').hidden) return;
-  if (applyCompareContradictions()) { renderCompare(); return; }
+  // D4.3／D4.4：只就地改被更正代號自己的節點，其他品項與圖表不重畫（codex R3）
+  const corrected = applyCompareContradictions();
+  if (corrected.length) {
+    $('compareBanner').innerHTML = compareBannerHTML();       // 橫幅不屬主體
+    for (const code of corrected) patchCompareStatus(code);
+    return;
+  }
   for (const li of document.querySelectorAll('#compareBody .compare-code[data-status="ok"]')) {
     const code = li.dataset.code;
     const d = state.compareData.get(code);
@@ -1340,7 +1361,8 @@ async function loadCompareData({ only = null } = {}) {
       } else if (v.reason === 'missing_code') {
         results.set(x.code, { status: 'missing', entry: null, error: null, basis: 'key' });
       } else if (!v.ok) {
-        results.set(x.code, { status: 'error', entry: null, error: '分片內容不合法' });
+        // showReason：D4.2 規定此分類須以「分片內容不合法」呈現，不得只顯示通用的「資料載入失敗」（codex R4）
+        results.set(x.code, { status: 'error', entry: null, error: '分片內容不合法', showReason: true });
       } else {
         results.set(x.code, { status: 'ok', entry: shard.drugs[x.code], error: null });
       }
@@ -1357,16 +1379,45 @@ async function loadCompareData({ only = null } = {}) {
 
 /**
  * D4.3（比較頁）：某代號為 missing、依據為無匹配前綴或已驗版 shard 缺 key，而已發布的 index 含該代號
- * → 該代號改為 error。只影響該代號。回傳是否有任何代號被更正。
+ * → 該代號改為 error。只影響該代號。回傳被更正的代號清單。
  */
 function applyCompareContradictions() {
-  let changed = false;
+  const changed = [];
   for (const [code, d] of state.compareData) {
     if (d.status !== 'missing' || !d.basis || !indexHas(code)) continue;
-    state.compareData.set(code, { status: 'error', entry: null, error: ABSENT_TEXT[d.basis], basis: d.basis, contradiction: true });
-    changed = true;
+    state.compareData.set(code, { status: 'error', entry: null, error: ABSENT_TEXT[d.basis], basis: d.basis, contradiction: true, showReason: true });
+    changed.push(code);
   }
   return changed;
+}
+
+/** 比較頁每代號的取得狀態文字；資料矛盾與條目結構壞須附上具體原因（D4.2、D4.3）。 */
+function compareStateText(d) {
+  return `${COMPARE_STATUS_TEXT[d.status]}${d.showReason && d.error ? `（${d.error}）` : ''}`;
+}
+
+/**
+ * 就地把某代號的狀態改寫進既有的比較主體（不重畫）。只碰帶該代號的節點：代號列、圖例狀態、
+ * 圖表狀態帶，以及摘要表中該代號那一欄的「取得狀態」儲存格。輸出須與 renderCompare() 對同一狀態的產物逐字相同。
+ * 只用於「非 ok → 非 ok」的轉換（ok 的代號有序列與表格內容，無法就地改寫）。
+ */
+function patchCompareStatus(code) {
+  const d = state.compareData.get(code);
+  const body = $('compareBody');
+  const sel = `[data-code="${CSS.escape(code)}"]`;
+  const li = body.querySelector(`.compare-code${sel}`);
+  if (li) {
+    li.dataset.status = d.status;
+    li.querySelector('.compare-state').textContent = compareStateText(d);
+  }
+  const legend = body.querySelector(`.cmp-legend-item${sel} .cmp-legend-state`);
+  if (legend) legend.textContent = COMPARE_STATUS_TEXT[d.status];
+  const band = body.querySelector(`.cmp-band${sel}`);
+  if (band) {
+    band.setAttribute('class', `cmp-band band-${d.status}`);
+    band.querySelector('title').textContent = `${code}：${COMPARE_STATUS_TEXT[d.status]}`;
+  }
+  for (const td of body.querySelectorAll(`.cmp-summary td.cmp-unavailable${sel}`)) td.textContent = COMPARE_STATUS_TEXT[d.status];
 }
 
 /** §6.1「完整成功」＝所有選定代號皆已取得有效且版本一致的資料。 */
@@ -1422,7 +1473,7 @@ function renderCompare() {
       <span class="tray-dot" aria-hidden="true"></span>
       <span class="mono">${esc(x.code)}</span>
       <span class="compare-name">${esc(name)}</span>
-      <span class="compare-state">${esc(COMPARE_STATUS_TEXT[d.status])}${d.contradiction ? `（${esc(d.error)}）` : ''}</span>
+      <span class="compare-state">${esc(compareStateText(d))}</span>
       <button type="button" class="link-btn" data-action="tray-remove" data-code="${esc(x.code)}">移除</button>
     </li>`;
   }).join('')}</ul>`;
@@ -1628,7 +1679,7 @@ function compareChartHTML(m) {
     const by = axisY + 24 + i * (BAND_H + BAND_GAP);
     parts.push(`<text class="band-label" x="${CM.l - 6}" y="${by + 11}" text-anchor="end">${esc(s.code.slice(0, 4))}…</text>`);
     if (s.status !== 'ok') {
-      parts.push(`<rect class="cmp-band band-${s.status}" x="${CM.l}" y="${by}" width="${iw}" height="${BAND_H}">
+      parts.push(`<rect class="cmp-band band-${s.status}" data-code="${esc(s.code)}" x="${CM.l}" y="${by}" width="${iw}" height="${BAND_H}">
         <title>${esc(`${s.code}：${COMPARE_STATUS_TEXT[s.status]}`)}</title></rect>`);
       return;
     }
@@ -1793,7 +1844,7 @@ function compareSummaryHTML(m) {
   const body = SUMMARY_ROWS.map(([label, get]) => `<tr><th scope="row">${esc(label)}</th>${cols.map((s) => {
     // 非成功代號：欄位保留、值改為取得狀態，不得填 0、不得留白、不得沿用其他代號
     const v = s.unavailable ? s.unavailable : (get(s) || '—');
-    return `<td${s.unavailable ? ' class="cmp-unavailable"' : ''}>${esc(v)}</td>`;
+    return `<td${s.unavailable ? ` class="cmp-unavailable" data-code="${esc(s.code)}"` : ''}>${esc(v)}</td>`;
   }).join('')}</tr>`).join('');
   const links = cols.map((s) => `<td><a href="?code=${encodeURIComponent(s.code)}" data-code="${esc(s.code)}" data-action="to-detail">查看完整歷史 ↗</a></td>`).join('');
   return `<section class="card cmp-card"><h3>摘要對照</h3>
@@ -1970,8 +2021,9 @@ function bind() {
     } else if (action === 'compare-retry') {
       const failed = state.compare.items
         .filter((x) => state.compareData.get(x.code)?.status === 'error').map((x) => x.code);
-      // 資料矛盾（缺 key）的 shard 已通過版本比對而留在快取：重試須重新請求該片
-      for (const code of failed) if (state.compareData.get(code)?.contradiction) evictShardOf(code);
+      // 已通過版本比對的 shard 會留在快取（§5.3）；資料矛盾（缺 key）與條目結構壞都出自這種 shard，
+      // 沿用即永遠重試不成，須重新請求該片（codex R2，與詳情頁 retry-shard 一致）。其他失敗本來就沒有快取
+      for (const code of failed) evictShardOf(code);
       if (failed.length) loadCompareData({ only: failed });
     } else if (action === 'upcoming-csv') {
       exportUpcomingCSV();

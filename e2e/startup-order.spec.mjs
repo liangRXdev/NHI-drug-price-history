@@ -24,7 +24,8 @@ test('S4(a)(b)(c) meta 扣住 → shard 與 index 皆 0；shard body 未完 → 
   expect(site.count('index'), '(a) meta 未到時 index 請求數').toBe(0);
 
   await site.release('meta');
-  await site.waitCount('shard:AC48', 1);                    // headers 已送、body 停在半途
+  await site.waitCount('shard:AC48', 1);
+  await site.waitHeaders('shard:AC48');                     // headers 已抵達瀏覽器、body 停在半途
   await site.expectCountStays('index', 0);                  // (b)
   await expect(shown(page)).toHaveCount(0);
 
@@ -107,8 +108,8 @@ for (const [name, url] of [
 test('S10(e) ?codes= 兩片：一片完成、另一片 body 未完 → index 0；皆落定後恰為 1', async ({ page }) => {
   const site = await gatedSite(page, { plan: { 'shard:B009': 'body-slow' } });
   await page.goto(`/?codes=${A},${B}`);
-  await site.waitCount('shard:AC48', 1);
-  await site.waitCount('shard:B009', 1);
+  await site.waitHeaders('shard:AC48');                     // 第一片已回應（fulfill 為原子：headers 到即 body 完）
+  await site.waitHeaders('shard:B009');                     // 第二片 headers 已到、body 未完
   await site.expectCountStays('index', 0);
   await site.finish('shard:B009');
   await expect(page.locator('.cmp-summary')).toBeVisible();
@@ -119,7 +120,7 @@ test('S10(e) ?codes= 兩片：一片完成、另一片 body 未完 → index 0�
 test('S10(f) ?view=upcoming：upcoming.json body 未完 → index 0；落定後恰為 1', async ({ page }) => {
   const site = await gatedSite(page, { plan: { upcoming: 'body-slow' } });
   await page.goto('/?view=upcoming');
-  await site.waitCount('upcoming', 1);
+  await site.waitHeaders('upcoming');
   await site.expectCountStays('index', 0);
   await site.finish('upcoming');
   await expect(page.locator('.upcoming-row').first()).toBeVisible();
@@ -130,7 +131,7 @@ test('S10(f) ?view=upcoming：upcoming.json body 未完 → index 0；落定後�
 test('S10(g) ?codes= 單一有效代號轉詳情：shard body 未完 → index 0；落定後恰為 1', async ({ page }) => {
   const site = await gatedSite(page, { plan: { 'shard:AC48': 'body-slow' } });
   await page.goto(`/?codes=${A}`);
-  await site.waitCount('shard:AC48', 1);
+  await site.waitHeaders('shard:AC48');
   await site.expectCountStays('index', 0);
   await site.finish('shard:AC48');
   await expect(shown(page)).toBeVisible();

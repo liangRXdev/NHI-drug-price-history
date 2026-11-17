@@ -335,6 +335,19 @@ function goldenExpectation(code, entry) {
   return { rows: entry.records.length + entry.invalidRecords.length, newest: maxFrom, name };
 }
 
+/**
+ * 摘要「最新一次調整」的獨立預期（不經 engine.js）：參考日當天已生效（from <= today）的紀錄中，
+ * 最後一筆 eventType 不是 unchanged 的事件。未來紀錄不算——歷史表首列會是未來那筆，兩者不同。
+ * 回傳該 metric 必須包含的字串：事件生效日，或無日期的固定文案。
+ */
+function latestExpectation(entry, today) {
+  const last = entry.records.filter((r) => r.from <= today).reverse().find((r) => r.eventType !== 'unchanged');
+  if (!last || last.eventType === 'initial' || last.eventType === 'first_priced') return '無調價紀錄';
+  if (['increase', 'decrease', 'relisted', 'terminated', 'suspended'].includes(last.eventType)) return last.from;
+  return '最近一次變動無法判定（來源資料異常）';
+}
+const latestMetric = (page) => detail(page).locator('.metric').filter({ has: page.locator('.name', { hasText: /^最新一次調整$/ }) }).locator('.val');
+
 /** §8.1 中 golden 快照沒有的類別以合成條目補上（驗收文件須標明為合成）。 */
 function withSynthetic(data) {
   const base = structuredClone(data.shards.AC48.drugs[A]);
@@ -349,17 +362,22 @@ function withSynthetic(data) {
   bad.invalidRecords = [{ rawFrom: '', rawTo: '2020-01-01', rawPrice: '1.00', error: 'blank_start' }];
   bad.flags = [...(bad.flags || []), 'invalid_records'];
   data.shards.AC48.drugs.AC48000002 = bad;
+  // 現行有價、單一區間（golden 11 筆的紀錄數為 6–24，沒有單一區間者）
+  const single = structuredClone(base);
+  single.records = [{ ...base.records[0], from: '2020-01-01', to: null, price: 7.5, rawPrice: '7.50' }];
+  data.shards.AC48.drugs.AC48000003 = single;
   return data;
 }
 
 const S6_CASES = [
   ...Object.entries(front.shards).map(([code, entry]) => {
     const e = goldenExpectation(code, entry);
-    return { code, label: 'golden', ...e, current: CURRENT_TEXT[code], title: `${e.name}（${code}）— ${APP_TITLE}`, h2: e.name };
+    return { code, label: 'golden', ...e, current: CURRENT_TEXT[code], title: `${e.name}（${code}）— ${APP_TITLE}`, h2: e.name, latest: latestExpectation(entry, TODAY) };
   }),
-  { code: 'AC48000001', label: '合成：尚無已生效紀錄', rows: 1, newest: '2026-12-01', current: '尚未生效', h2: '—', title: `AC48000001（AC48000001）— ${APP_TITLE}` },
-  { code: 'AC4809', label: '合成：非 10 碼', rows: 8, newest: '2024-04-01', current: '4.12', h2: '撫緒膜衣錠20毫克', title: `撫緒膜衣錠20毫克（AC4809）— ${APP_TITLE}` },
-  { code: 'AC48000002', label: '合成：含日期異常紀錄', rows: 9, newest: '2024-04-01', current: '4.12', h2: '撫緒膜衣錠20毫克', title: `撫緒膜衣錠20毫克（AC48000002）— ${APP_TITLE}` },
+  { code: 'AC48000001', label: '合成：尚無已生效紀錄', rows: 1, newest: '2026-12-01', current: '尚未生效', h2: '—', title: `AC48000001（AC48000001）— ${APP_TITLE}`, latest: '無調價紀錄' },
+  { code: 'AC4809', label: '合成：非 10 碼', rows: 8, newest: '2024-04-01', current: '4.12', h2: '撫緒膜衣錠20毫克', title: `撫緒膜衣錠20毫克（AC4809）— ${APP_TITLE}`, latest: '2024-04-01' },
+  { code: 'AC48000002', label: '合成：含日期異常紀錄', rows: 9, newest: '2024-04-01', current: '4.12', h2: '撫緒膜衣錠20毫克', title: `撫緒膜衣錠20毫克（AC48000002）— ${APP_TITLE}`, latest: '2024-04-01' },
+  { code: 'AC48000003', label: '合成：現行有價、單一區間', rows: 1, newest: '2020-01-01', current: '7.50', h2: '撫緒膜衣錠20毫克', title: `撫緒膜衣錠20毫克（AC48000003）— ${APP_TITLE}`, latest: '無調價紀錄' },
 ];
 
 async function openDetail(page, code, indexBehavior) {
@@ -379,6 +397,7 @@ for (const c of S6_CASES) {
     await expect(detail(page).locator('.metric.key .val')).toContainText(c.current);
     await expect(detail(page).locator('table.history tbody tr')).toHaveCount(c.rows);
     await expect(detail(page).locator('table.history tbody tr[data-kind="record"]').first().locator('td.date').first()).toHaveText(c.newest);
+    await expect(latestMetric(page)).toContainText(c.latest);               // 摘要的最新事件：不是歷史表首列
     await expect(page).toHaveTitle(c.title);
     const htmlPending = await detail(page).innerHTML();
 
@@ -464,19 +483,20 @@ function withEdgeFixtures(data, today) {
 // rows／newest 由 fixture 的 records 讀出；conflictRows／overlapRows＝歷史表中帶該標記的列數。
 const S6_EDGE = [
   { code: 'P000000201', today: '2021-06-01', label: 'conflict：參考日落在衝突組（12.00 與 9.00 並存）',
-    rows: 5, newest: '2023-01-01', current: CONFLICT_TEXT, never: [], conflictRows: 2, overlapRows: 1 },
+    rows: 5, newest: '2023-01-01', current: CONFLICT_TEXT, never: [], conflictRows: 2, overlapRows: 1, latest: '最近一次變動無法判定（來源資料異常）' },
   { code: 'P000000201', today: '2023-06-01', label: 'pricedBefore＝前價不唯一（衝突組 → 暫停 → 終止）',
     rows: 5, newest: '2023-01-01', current: '已終止支付（終止前支付價不唯一（來源紀錄衝突））',
-    never: [/終止前 (9|10|12)\.00 元/, '此前無有價紀錄'], conflictRows: 2, overlapRows: 1 },
+    never: [/終止前 (9|10|12)\.00 元/, '此前無有價紀錄'], conflictRows: 2, overlapRows: 1, latest: '最近一次變動無法判定（來源資料異常）' },
   { code: 'P000000204', today: '2023-06-01', label: 'pricedBefore＝數值（衝突組後有單一有價列 11.00 → 終止）',
     rows: 5, newest: '2023-01-01', current: '已終止支付（終止前 11.00 元）',
-    never: ['支付價不唯一', /終止前 (9|10|12)\.00 元/, '此前無有價紀錄'], conflictRows: 2, overlapRows: 1 },
+    never: ['支付價不唯一', /終止前 (9|10|12)\.00 元/, '此前無有價紀錄'], conflictRows: 2, overlapRows: 1,
+    latest: '已終止支付（終止前 11.00 元，2023-01-01 起）' },
   { code: 'A020296321', today: '1996-01-01', label: 'pricedBefore＝null（首列 0 元，此前無有價紀錄）', golden: true,
-    rows: 6, newest: '2014-07-01', current: '0 元（此前無有價紀錄）', never: ['已終止支付', /終止前/], conflictRows: 0, overlapRows: 0 },
+    rows: 6, newest: '2014-07-01', current: '0 元（此前無有價紀錄）', never: ['已終止支付', /終止前/], conflictRows: 0, overlapRows: 0, latest: '無調價紀錄' },
   { code: 'S000000101', today: '2020-08-01', label: 'overlap：同價重疊（10.00 與 10.00）→ 仍給單一價格',
-    rows: 2, newest: '2020-07-01', current: '10.00', never: [CONFLICT_TEXT], conflictRows: 0, overlapRows: 1 },
+    rows: 2, newest: '2020-07-01', current: '10.00', never: [CONFLICT_TEXT], conflictRows: 0, overlapRows: 1, latest: '無調價紀錄' },
   { code: 'S000000102', today: '2020-08-01', label: 'overlap：異價重疊（10.00 與 12.00）→ 不給確定價格',
-    rows: 2, newest: '2020-07-01', current: CONFLICT_TEXT, never: [], conflictRows: 0, overlapRows: 1 },
+    rows: 2, newest: '2020-07-01', current: CONFLICT_TEXT, never: [], conflictRows: 0, overlapRows: 1, latest: '最近一次變動無法判定（來源資料異常）' },
 ];
 
 async function openEdgeDetail(page, c, indexBehavior) {
@@ -501,6 +521,7 @@ for (const c of S6_EDGE) {
     await expect(detail(page).locator('table.history tbody tr[data-kind="record"]').first().locator('td.date').first()).toHaveText(c.newest);
     await expect(rows.filter({ has: page.locator('.tag', { hasText: /^來源紀錄衝突$/ }) })).toHaveCount(c.conflictRows);
     await expect(rows.filter({ has: page.locator('.tag', { hasText: /^重疊$/ }) })).toHaveCount(c.overlapRows);
+    await expect(latestMetric(page)).toHaveText(c.latest);
     await expect(page).toHaveTitle(`${name}（${c.code}）— ${APP_TITLE}`);
     const htmlPending = await detail(page).innerHTML();
 
@@ -512,3 +533,33 @@ for (const c of S6_EDGE) {
     expect(await detail(page2).innerHTML()).toBe(htmlPending);
   });
 }
+
+// ── R1（codex-review 2026-11-17）：index 通過版本比對但條目損毀 → 不得停在 loading ─────────
+// validateIndex 只驗外層；轉換（prepareIndex）拋錯時必須落到 index error，保留主體並提供重試。
+const brokenIndex = (data) => ({ json: { dataVersion: data.index.dataVersion, drugs: [null] } });
+
+test('R1 詳情入口：index 同版本但條目損毀 → index 錯誤橫幅＋重試，詳情不變；重試成功後可搜尋', async ({ page }) => {
+  const data = buildData();
+  const site = await gatedSite(page, { data, plan: { index: [brokenIndex(data), 'ok'] } });
+  await page.goto(`/?code=${A}`);
+  await expectDetailA(page);
+  await expect(banners(page)).toContainText(TEXT.indexError);
+  await expectDetailA(page);
+  await banners(page).getByRole('button', { name: '重試' }).click();
+  await site.waitCount('index', 2);
+  await expect(banners(page)).not.toContainText(TEXT.indexError);
+  expect(site.count('meta')).toBe(1);
+  await page.locator('#backLink').click();
+  await expectSearchFinds(page, A);
+});
+
+test('R1 首頁入口：index 同版本但條目損毀 → 錯誤＋重試，不停在「載入中」', async ({ page }) => {
+  const data = buildData();
+  await gatedSite(page, { data, plan: { index: brokenIndex(data) } });
+  await page.goto('/');
+  await expect(banners(page)).toContainText(TEXT.coreError);
+  await expect(banners(page).getByRole('button', { name: '重試' })).toBeVisible();
+  await expect(q(page)).toBeDisabled();
+  await expect(status(page)).not.toHaveText(TEXT.coreLoading);
+  await expect(results(page)).toHaveCount(0);
+});

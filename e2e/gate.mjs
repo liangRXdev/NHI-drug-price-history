@@ -36,6 +36,14 @@ export async function gatedSite(page, opts = {}) {
   const counts = {};
   const held = {};
   const slow = {};
+  const headers = {};               // 瀏覽器已收到回應 headers 的次數（Playwright 的 response 事件）
+  const slowName = {};              // body-slow 改道後，回應事件帶的是替換後的網址，須由 id 對回資源名
+  page.on('response', (res) => {
+    const path = new URL(res.url()).pathname;
+    const m = /\/__slow_body\/([\w-]+)$/.exec(path);
+    const name = m ? slowName[m[1]] : nameOf(path.replace(/^.*\/data\//, ''));
+    if (name) headers[name] = (headers[name] || 0) + 1;
+  });
 
   const defaultBody = (name) => {
     if (name === 'meta') return data.meta;
@@ -63,6 +71,7 @@ export async function gatedSite(page, opts = {}) {
       const id = randomUUID();
       const put = await fetch(`${ORIGIN}/__slow_put/${id}`, { method: 'PUT', body: JSON.stringify(defaultBody(name)) });
       if (put.status !== 204) throw new Error(`slow_put 失敗：${put.status}`);
+      slowName[id] = name;
       (slow[name] ||= []).push(id);
       return route.continue({ url: `${ORIGIN}/__slow_body/${id}` });
     }
@@ -96,9 +105,17 @@ export async function gatedSite(page, opts = {}) {
       const list = held[name].splice(0);
       for (const resolve of list) resolve(behavior);
     },
-    /** 讓 body-slow 的回應收完。 */
+    /** 等到瀏覽器已收到該資源第 n 次回應的 headers（body 可能尚未收完）。 */
+    async waitHeaders(name, n = 1) {
+      await expect.poll(() => headers[name] || 0, { message: `等待 ${name} 的 headers 抵達瀏覽器` }).toBeGreaterThanOrEqual(n);
+    },
+    /**
+     * 讓 body-slow 的回應收完。先確認 headers 已抵達瀏覽器：否則伺服器會在 body 請求抵達時直接送完整內容，
+     * 「headers 已到、body 未完」的階段根本不存在，headers 一到就啟動 index 的錯誤實作也會通過。
+     */
     async finish(name) {
       await expect.poll(() => (slow[name] || []).length, { message: `等待 ${name} 進入 body-slow` }).toBeGreaterThan(0);
+      await ctl.waitHeaders(name);
       for (const id of slow[name].splice(0)) await fetch(`${ORIGIN}/__slow_release/${id}`);
     },
     /** 等到請求數達到 n。 */
@@ -154,7 +171,9 @@ export async function watchMutations(page, selector) {
     const el = document.querySelector(sel);
     if (!el) throw new Error(`watchMutations：找不到 ${sel}`);
     const records = [];
-    const describe = (n) => (n.nodeType === 1 ? `${n.nodeName.toLowerCase()}${n.className && typeof n.className === 'string' ? `.${n.className.trim().replace(/\s+/g, '.')}` : ''}` : `#text<${n.parentElement?.className || ''}>`);
+    // 結尾的 [代號]：最近一個帶 data-code 的祖先（含自身），讓斷言能錨定「是哪個品項的節點」
+    const owner = (n) => (n.nodeType === 1 ? n : n.parentElement)?.closest?.('[data-code]')?.dataset.code || '';
+    const describe = (n) => `${n.nodeType === 1 ? `${n.nodeName.toLowerCase()}${n.className && typeof n.className === 'string' ? `.${n.className.trim().replace(/\s+/g, '.')}` : ''}` : `#text<${n.parentElement?.className || ''}>`}[${owner(n)}]`;
     const obs = new MutationObserver((list) => { for (const m of list) records.push(`${m.type}@${describe(m.target)}`); });
     obs.observe(el, { subtree: true, childList: true, attributes: true, characterData: true });
     (window.__mut ||= {})[sel] = { records, obs };

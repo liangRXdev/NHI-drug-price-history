@@ -56,11 +56,11 @@ test('S13 index 之後發布：預告主體零 mutation', async ({ page }) => {
   await expect(page.locator('.upcoming-row')).toHaveCount(3);
   await expect(page.locator('#upcomingDates')).not.toContainText('載入中');      // status 已落定
   await site.waitHeld('index');
-  await watchMutations(page, '#upcomingList');
+  await watchMutations(page, '#upcomingView');              // 整個預告主體（控制項、狀態列、清單），不只清單
   await site.release('index');
   await waitSearchReady(page);
   await page.waitForTimeout(SETTLE_MS);
-  expect(await mutations(page, '#upcomingList')).toEqual([]);
+  expect(await mutations(page, '#upcomingView')).toEqual([]);
 });
 
 test('S13 index 之後發布：比較主體零 mutation，比較籃 chip 補上 golden 品名', async ({ page }) => {
@@ -93,5 +93,7 @@ test('S13 selectMeta 回 null 的代號（合成）：發布後品名補為 inde
   await page.waitForTimeout(SETTLE_MS);
   const records = await mutations(page, '#compareBody');
   expect(records.length, 'mutation 筆數').toBeGreaterThan(0);
-  for (const r of records) expect(r, 'mutation 位置').toMatch(/compare-name/);
+  // 錨定到「該代號」的品名節點：錯改另一品項的 .compare-name 不得通過
+  for (const r of records) expect(r, 'mutation 位置').toMatch(new RegExp(`compare-name>?\\[${N}\\]$`));
+  await expect(page.locator(`.compare-code[data-code="${B}"] .compare-name`)).toHaveText('低落美膜衣錠２５公絲');
 });

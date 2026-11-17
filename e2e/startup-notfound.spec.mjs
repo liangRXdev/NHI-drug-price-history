@@ -222,11 +222,33 @@ for (const c of CONFLICTS) {
     const linesB = await page.locator(`.cmp-line[data-code="${B}"]`).count();
     const columnB = await page.locator('.cmp-summary tbody tr td:nth-child(3)').allTextContents();
     const eventsB = await page.locator('.cmp-events tbody tr').count();
+    // D4.3「只影響該代號，其他品項不動」：保存另一品項與圖表的節點身分，並記錄主體的 mutation
+    const keep = await Promise.all([`.cmp-legend-item[data-code="${B}"]`, 'svg.cmp-chart', '.cmp-summary', `.compare-code[data-code="${B}"]`]
+      .map((sel) => page.locator(sel).first().elementHandle()));
+    await watchMutations(page, '#compareBody');
 
     await site.release('index');
     await expect(row).toHaveAttribute('data-status', 'error');
+    await expect(row.locator('.compare-state')).toHaveText(`資料載入失敗（${c.text}）`);
     await expect(page.locator('#compareBanner')).toContainText(c.code);
     await expect(page.locator('#compareView')).toContainText(c.text);
+    await expect(page.locator('#compareBody')).not.toContainText(TEXT.notFound);      // 圖例、摘要表不得殘留舊狀態
+    await page.waitForTimeout(SETTLE_MS);
+    for (const h of keep) expect(await h.evaluate((n) => n.isConnected), '其他品項與圖表的節點須為同一個').toBe(true);
+    const records = await mutations(page, '#compareBody');
+    expect(records.length, 'mutation 筆數').toBeGreaterThan(0);
+    // 只允許落在該代號自己的節點，或摘要表中該代號那一欄的「取得狀態」儲存格
+    for (const r of records) expect(r, 'mutation 位置').toMatch(new RegExp(`\\[${c.code}\\]$|cmp-unavailable>?\\[\\]$`));
+    // 就地改寫的結果須與「index 先發布、直接渲染」同一狀態的產物逐字相同：漏改任何一處（圖例、狀態帶、摘要欄）都會不同
+    const patched = await page.locator('#compareBody').innerHTML();
+    const page2 = await page.context().newPage();
+    await page2.setViewportSize(page.viewportSize());
+    await gatedSite(page2, { data: c.make(buildData()) });
+    await page2.goto('/');
+    await waitSearchReady(page2);
+    await routeTo(page2, `?codes=${c.code},${B}`);
+    await expect(page2.locator(`.compare-code[data-code="${c.code}"]`)).toHaveAttribute('data-status', 'error');
+    expect(await page2.locator('#compareBody').innerHTML()).toBe(patched);
     expect(await page.locator(`.cmp-line[data-code="${B}"]`).count()).toBe(linesB);
     expect(await page.locator('.cmp-summary tbody tr td:nth-child(3)').allTextContents()).toEqual(columnB);
     expect(await page.locator('.cmp-events tbody tr').count()).toBe(eventsB);
@@ -268,9 +290,44 @@ test('S9(f) 比較頁：一個代號的條目結構壞 → 該代號為「分片
   await gatedSite(page, { data });
   await page.goto(`/?codes=${A},${B}`);
   await expect(page.locator(`.compare-code[data-code="${A}"]`)).toHaveAttribute('data-status', 'error');
+  await expect(page.locator(`.compare-code[data-code="${A}"] .compare-state`)).toHaveText(`資料載入失敗（${BAD_SHARD}）`);
   await expect(page.locator('#compareBanner')).toContainText(A);
   await expect(page.locator(`.compare-code[data-code="${B}"]`)).toHaveAttribute('data-status', 'ok');
 });
+
+// §5.3：條目結構壞的 shard 已通過版本比對而留在快取；比較頁重試須重新請求該片，否則來源修正後永遠救不回來
+test('S9(f) 比較頁：條目結構壞 → 按重試重新請求該片 → 取得修正後的內容，該代號轉為 ok', async ({ page }) => {
+  const data = buildData();
+  const bad = structuredClone(data.shards.AC48);
+  bad.drugs[A].records = {};
+  const site = await gatedSite(page, { data, plan: { 'shard:AC48': [{ json: bad }, 'ok'] } });
+  await page.goto(`/?codes=${A},${B}`);
+  const row = page.locator(`.compare-code[data-code="${A}"]`);
+  await expect(row).toHaveAttribute('data-status', 'error');
+  expect(site.count('shard:AC48')).toBe(1);
+  await page.locator('#compareBanner').getByRole('button', { name: '重試' }).click();
+  await expect(row).toHaveAttribute('data-status', 'ok');
+  expect(site.count('shard:AC48'), '重試須重新請求該片').toBe(2);
+  await expect(page.locator('.cmp-summary thead th .mono')).toHaveText([A, B]);
+  await expect(page.locator('#compareBanner')).not.toContainText(A);
+});
+
+// S9(b) 的比較頁版本：index 先發布，之後才進比較頁 → 直接是 error，過程中不得出現「查無此代號」
+for (const c of CONFLICTS) {
+  test(`S9(b) 比較頁 ${c.kind}：index 先發布 → 該代號直接為 error「${c.text}」，過程中不得出現查無`, async ({ page }) => {
+    await trackText(page, ['查無']);
+    await gatedSite(page, { data: c.make(buildData()) });
+    await page.goto('/');
+    await waitSearchReady(page);
+    await routeTo(page, `?codes=${c.code},${B}`);
+    const row = page.locator(`.compare-code[data-code="${c.code}"]`);
+    await expect(row).toHaveAttribute('data-status', 'error');
+    await expect(row.locator('.compare-state')).toHaveText(`資料載入失敗（${c.text}）`);
+    await expect(page.locator(`.compare-code[data-code="${B}"]`)).toHaveAttribute('data-status', 'ok');
+    await page.waitForTimeout(SETTLE_MS);
+    expect(await everSaid(page, '查無')).toBe(false);
+  });
+}
 
 test('S9(h) A 查無 → 離開 → 返回 A 時 index 已發布且含 A → 直接顯示錯誤', async ({ page }) => {
   const c = CONFLICTS[0];
