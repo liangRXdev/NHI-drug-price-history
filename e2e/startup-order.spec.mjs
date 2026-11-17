@@ -275,3 +275,56 @@ for (const [name, secondIndex, ok] of [
     }
   });
 }
+
+// ── S10(b) 補測：比較籃的其餘入口（2026-11-17）───────────────────
+// 規格 T2 的措辭是「比較籃增刪**導致的重新載入**」。「增」不會重新載入視圖，且 shard 未落定時
+// 畫面上沒有任何「＋比較」按鈕（搜尋卡要等 index、詳情要等 shard），所以「shard 未落定時加入」不可達。
+// 這裡斷言的是可觀察的事實：未落定時無按鈕可按；落定後加入不重抓任何資源、index 不重複啟動。
+test('S10(b) 比較籃「增」：shard 未落定時無「＋比較」可按；落定後加入 → 不重新載入，index 請求數維持 1', async ({ page }) => {
+  const site = await gatedSite(page, { plan: { 'shard:AC48': 'hold' } });
+  await page.goto(`/?code=${A}`);
+  await site.waitHeld('shard:AC48');
+  await site.expectCountStays('index', 0);
+  await expect(page.locator('[data-action="add-compare"]')).toHaveCount(0);
+
+  await site.release('shard:AC48');
+  await expect(shown(page)).toBeVisible();
+  await site.waitCount('index', 1);
+  await detail(page).locator(`[data-action="add-compare"][data-code="${A}"]`).click();
+  await expect(page.locator('#compareTray .tray-chip')).toHaveCount(1);
+  await expect(page.locator('#compareTray .tray-chip .mono')).toHaveText(A);
+  await site.expectCountStays('index', 1);
+  expect(site.count('meta'), 'meta.json 請求數').toBe(1);
+  expect(site.count('shard:AC48'), 'shard 請求數').toBe(1);
+});
+
+const seedTray = (page, codes) => page.addInitScript((list) => {
+  sessionStorage.setItem('compareCodes', JSON.stringify(list.map((code, slot) => ({ code, slot, valid: true }))));
+}, codes);
+
+test('S10(b)(c) T2：詳情 shard 未落定時按比較籃「開始比較」→ index 立即啟動，之後仍只有 1 次', async ({ page }) => {
+  await seedTray(page, [A, B]);
+  const site = await gatedSite(page, { plan: { 'shard:AC48': 'hold', 'shard:B009': 'hold' } });
+  await page.goto(`/?code=${A}`);
+  await site.waitHeld('shard:AC48');
+  await site.expectCountStays('index', 0);
+  await page.locator('#compareTray [data-action="tray-start"]').click();
+  await site.waitCount('index', 1);
+  await site.release('shard:AC48');
+  await site.release('shard:B009');
+  await expect(page.locator('.cmp-summary')).toBeVisible();
+  await site.expectCountStays('index', 1);
+});
+
+test('S10(b)(c) T2：比較頁 shard 未落定時按比較籃「清空」→ index 立即啟動，之後仍只有 1 次', async ({ page }) => {
+  const site = await gatedSite(page, { plan: { 'shard:AC48': 'hold', 'shard:B009': 'hold' } });
+  await page.goto(`/?codes=${A},${B}`);
+  await site.waitHeld('shard:AC48');
+  await site.expectCountStays('index', 0);
+  await page.locator('#compareTray [data-action="tray-clear"]').click();
+  await site.waitCount('index', 1);
+  await expect(page.locator('#searchView')).toBeVisible();
+  await site.release('shard:AC48');
+  await site.release('shard:B009');
+  await site.expectCountStays('index', 1);
+});

@@ -442,3 +442,73 @@ for (const [name, behavior, button, text] of [
     }
   });
 }
+
+// ── S6 補測（2026-11-17）：§8.1 的 overlap、conflict、pricedBefore 三態 ──────────
+// 資料來自 Python 生成器產出的 golden fixture（非手工合成）；預期文字由 fixture 的 records 人工讀出，
+// 對照 spec.md §5.1／§5.3／§5.5 的文案，不經 engine.js。
+const pbFix = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_priced_before_ambiguous.json', import.meta.url), 'utf8'));
+const ovFix = JSON.parse(readFileSync(new URL('../tests/fixtures/golden_frontend_same_price_overlap.json', import.meta.url), 'utf8'));
+const CONFLICT_TEXT = '來源紀錄衝突，無法判定單一支付價';
+
+function withEdgeFixtures(data, today) {
+  for (const [prefix, fix] of [['P000', pbFix], ['S000', ovFix]]) {
+    data.shards[prefix] = { shardVersion: `sha256:e2e-${prefix}`, drugs: structuredClone(fix.shards) };
+    data.meta.shards.versions[prefix] = `sha256:e2e-${prefix}`;
+    // 該日有 index 快照就一併放進 index：index 握有此代號的資料時，詳情仍不得因它而改變
+    for (const d of Object.values(fix.index[today] || {})) data.index.drugs.push(structuredClone(d));
+  }
+  data.meta.shards.files = Object.keys(data.shards).sort();
+  return data;
+}
+
+// rows／newest 由 fixture 的 records 讀出；conflictRows／overlapRows＝歷史表中帶該標記的列數。
+const S6_EDGE = [
+  { code: 'P000000201', today: '2021-06-01', label: 'conflict：參考日落在衝突組（12.00 與 9.00 並存）',
+    rows: 5, newest: '2023-01-01', current: CONFLICT_TEXT, never: [], conflictRows: 2, overlapRows: 1 },
+  { code: 'P000000201', today: '2023-06-01', label: 'pricedBefore＝前價不唯一（衝突組 → 暫停 → 終止）',
+    rows: 5, newest: '2023-01-01', current: '已終止支付（終止前支付價不唯一（來源紀錄衝突））',
+    never: [/終止前 (9|10|12)\.00 元/, '此前無有價紀錄'], conflictRows: 2, overlapRows: 1 },
+  { code: 'P000000204', today: '2023-06-01', label: 'pricedBefore＝數值（衝突組後有單一有價列 11.00 → 終止）',
+    rows: 5, newest: '2023-01-01', current: '已終止支付（終止前 11.00 元）',
+    never: ['支付價不唯一', /終止前 (9|10|12)\.00 元/, '此前無有價紀錄'], conflictRows: 2, overlapRows: 1 },
+  { code: 'A020296321', today: '1996-01-01', label: 'pricedBefore＝null（首列 0 元，此前無有價紀錄）', golden: true,
+    rows: 6, newest: '2014-07-01', current: '0 元（此前無有價紀錄）', never: ['已終止支付', /終止前/], conflictRows: 0, overlapRows: 0 },
+  { code: 'S000000101', today: '2020-08-01', label: 'overlap：同價重疊（10.00 與 10.00）→ 仍給單一價格',
+    rows: 2, newest: '2020-07-01', current: '10.00', never: [CONFLICT_TEXT], conflictRows: 0, overlapRows: 1 },
+  { code: 'S000000102', today: '2020-08-01', label: 'overlap：異價重疊（10.00 與 12.00）→ 不給確定價格',
+    rows: 2, newest: '2020-07-01', current: CONFLICT_TEXT, never: [], conflictRows: 0, overlapRows: 1 },
+];
+
+async function openEdgeDetail(page, c, indexBehavior) {
+  const site = await gatedSite(page, { today: c.today, data: withEdgeFixtures(buildData(), c.today), plan: { index: indexBehavior } });
+  await page.goto(`/?code=${c.code}`);
+  await expect(detail(page).locator('.metric.key')).toBeVisible();
+  await expect(page.locator('#sourceInfo')).toContainText('資料無變動');     // status 已落定
+  return site;
+}
+
+for (const c of S6_EDGE) {
+  const name = c.golden ? front.shards[c.code].meta.chName : '測試藥';
+  test(`S6 補測 ${c.code}＠${c.today}（${c.label}）：內容等於獨立預期值，且 index 未到與已發布時 #detail 逐字相同`, async ({ page, context }) => {
+    const pending = await openEdgeDetail(page, c, 'pending');
+    await pending.waitCount('index', 1);                    // 請求已發出且仍 pending
+    const key = detail(page).locator('.metric.key .val');
+    await expect(detail(page).locator('.detail-head h2')).toHaveText(name);
+    await expect(key).toContainText(c.current);
+    for (const bad of c.never) await expect(key).not.toContainText(bad);
+    const rows = detail(page).locator('table.history tbody tr');
+    await expect(rows).toHaveCount(c.rows);
+    await expect(detail(page).locator('table.history tbody tr[data-kind="record"]').first().locator('td.date').first()).toHaveText(c.newest);
+    await expect(rows.filter({ has: page.locator('.tag', { hasText: /^來源紀錄衝突$/ }) })).toHaveCount(c.conflictRows);
+    await expect(rows.filter({ has: page.locator('.tag', { hasText: /^重疊$/ }) })).toHaveCount(c.overlapRows);
+    await expect(page).toHaveTitle(`${name}（${c.code}）— ${APP_TITLE}`);
+    const htmlPending = await detail(page).innerHTML();
+
+    const page2 = await context.newPage();
+    await page2.setViewportSize(page.viewportSize());
+    await openEdgeDetail(page2, c, 'ok');
+    await waitSearchReady(page2);
+    await expect(page2).toHaveTitle(`${name}（${c.code}）— ${APP_TITLE}`);
+    expect(await detail(page2).innerHTML()).toBe(htmlPending);
+  });
+}
