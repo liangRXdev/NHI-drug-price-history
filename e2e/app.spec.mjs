@@ -164,12 +164,13 @@ for (const [code, name, price] of [['AC48092100', '撫緒', /^\d+\.\d{2}\s*元$/
   });
 }
 
+// spec-startup G1：deep link 不再等 index——index 載入中即顯示詳情（原本此時顯示「資料載入中」）
 test('C5 index 載入中不顯示「查無」；?code=ZZZ →「查無此代號」且不殘留前一品項', async ({ page }) => {
   await mockSite(page, { indexDelay: 4000 });                  // 需長於並行負載下 goto 的時間，才看得到載入中狀態
   await page.goto('/?code=AC48092100');
-  await expect(detail(page)).toContainText('資料載入中');
-  await expect(page.locator('body')).not.toContainText('查無');
   await expect(detail(page).locator('.detail-head .code')).toHaveText('AC48092100');
+  await expect(page.locator('#q')).toBeDisabled();             // index 仍在途
+  await expect(page.locator('body')).not.toContainText('查無');
 
   // 站內切換（不重新載入頁面）到不存在的代號
   await page.evaluate(() => { history.pushState(null, '', '?code=ZZZ'); dispatchEvent(new PopStateEvent('popstate')); });
@@ -317,8 +318,7 @@ test('C7 競態：選 A（回應由測試控制）後立即選 B → A 回應當
 });
 
 // ── C8 核心資源失敗、E6 混批 ────────────────────────────────────
-for (const [what, opt] of [['index 404', { index: '404' }], ['index 損毀', { index: 'corrupt' }],
-  ['meta 404', { meta: '404' }], ['meta 損毀', { meta: 'corrupt' }]]) {
+for (const [what, opt] of [['meta 404', { meta: '404' }], ['meta 損毀', { meta: 'corrupt' }]]) {
   test(`C8 ${what} → 錯誤＋重試，不回報「查無」`, async ({ page }) => {
     await mockSite(page, opt);
     await page.goto('/?code=AC48092100');
@@ -326,6 +326,23 @@ for (const [what, opt] of [['index 404', { index: '404' }], ['index 損毀', { i
     await expect(page.locator('#banners button', { hasText: '重試' })).toBeVisible();
     await expect(page.locator('body')).not.toContainText('查無');
     await expect(page.locator('#q')).toBeDisabled();
+  });
+}
+
+// spec-startup D3：index 失敗不再擋下詳情——詳情照常顯示，橫幅改為 §5.5 文案；搜尋頁仍是原錯誤文案
+for (const [what, opt] of [['index 404', { index: '404' }], ['index 損毀', { index: 'corrupt' }]]) {
+  test(`C8 ${what} → 詳情照常、橫幅提示搜尋無法使用＋重試，不回報「查無」；搜尋頁為錯誤＋重試`, async ({ page }) => {
+    await mockSite(page, opt);
+    await page.goto('/?code=AC48092100');
+    await expect(page.locator('#banners .alert--error')).toContainText('搜尋功能暫時無法使用');
+    await expect(page.locator('#banners button', { hasText: '重試' })).toBeVisible();
+    await expect(detail(page).locator('.metric.key .val')).toContainText('4.12');
+    await expect(page.locator('body')).not.toContainText('查無');
+    await page.locator('#backLink').click();
+    await expect(page.locator('#banners .alert--error')).toContainText('無法載入藥價資料');
+    await expect(page.locator('#banners button', { hasText: '重試' })).toBeVisible();
+    await expect(page.locator('#q')).toBeDisabled();
+    await expect(page.locator('body')).not.toContainText('查無');
   });
 }
 
@@ -386,13 +403,19 @@ test('C3 status 永不回應 → 逾時後轉紅並於現行價旁加註（codex
   await expect(page.locator('#sourceInfo')).toContainText('無法取得');
 });
 
-test('E6 index 與 meta 版本不一致 → 提示重新整理，不可搜尋', async ({ page }) => {
+// spec-startup D3 推翻 spec.md §7「index 版本不符 → 不組合摘要與圖表」：該規則只適用於需要 index 的內容。
+// 詳情的正確性依據是 shard 對 meta 的版本比對，故照常顯示；搜尋維持不可用
+test('E6 index 與 meta 版本不一致 → 詳情照常、提示重新整理，不可搜尋', async ({ page }) => {
   const data = buildData();
   await mockSite(page, { data, index: { ...data.index, dataVersion: 'sha256:other' } });
   await page.goto('/?code=AC48092100');
+  await expect(page.locator('#banners')).toContainText('搜尋資料與目前頁面的資料版本不一致');
+  await expect(page.locator('#banners button', { hasText: '重新整理' })).toBeVisible();
+  await expect(detail(page).locator('.metric.key .val')).toContainText('4.12');
+  await page.locator('#backLink').click();
   await expect(page.locator('#banners')).toContainText('資料已更新，請重新整理');
-  await expect(detail(page).locator('.metric')).toHaveCount(0);
   await expect(page.locator('#q')).toBeDisabled();
+  await expect(page.locator('#results .result')).toHaveCount(0);
 });
 
 test('E6 shard 與 meta 版本不一致 → 不顯示摘要與圖表', async ({ page }) => {

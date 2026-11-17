@@ -781,3 +781,159 @@ def test_oversized_index_fails_build_and_writes_nothing(tmp_path):
               checked_at="2026-09-18T02:00:00+08:00")
     assert any("drug_index.json" in m for m in e.value.args[0])
     assert tree_hash(tmp_path) == before
+
+
+# ── shard 路由守門（spec-startup §5.6、S14）────────────────────
+# 詳情頁的「查無此代號」改由 shard 判定後，「前端依 shard map 找得到每個代號」成為前提。
+ROUTING = json.loads((ROOT / "tests" / "fixtures" / "shard_routing_cases.json").read_text(encoding="utf-8"))
+
+
+def _tamper_extra_index(shards, index):
+    index.append({**index[0], "code": "ZZ99999999"})
+
+
+def _tamper_extra_shard(shards, index):
+    p = sorted(shards)[0]
+    shards[p]["ZZ99999999"] = next(iter(shards[p].values()))
+
+
+def _tamper_wrong_shard(shards, index):
+    src, dst = sorted(shards)[:2]
+    code = sorted(shards[src])[0]
+    shards[dst][code] = shards[src].pop(code)
+
+
+def _tamper_duplicate(shards, index):
+    src, dst = sorted(shards)[:2]
+    code = sorted(shards[src])[0]
+    shards[dst][code] = shards[src][code]
+
+
+TAMPERS = {
+    "index_extra": (_tamper_extra_index, "index 有而任何 shard 都沒有"),
+    "shard_extra": (_tamper_extra_shard, "shard 有而 index 沒有"),
+    "wrong_shard": (_tamper_wrong_shard, "代號不在最長前綴所選的片"),
+    "duplicate": (_tamper_duplicate, "同一代號存在於多片"),
+}
+
+
+@pytest.mark.parametrize("allow_anomaly", [False, True])
+@pytest.mark.parametrize("kind", sorted(TAMPERS))
+def test_s14_routing_guard_fails_publish_and_writes_nothing(tmp_path, monkeypatch, kind, allow_anomaly):
+    build(tmp_path)                                   # 預先存在且有內容的 data/
+    before = tree_hash(tmp_path)
+    assert (tmp_path / "status.json").exists() and any((tmp_path / "history").iterdir())
+    tamper, label = TAMPERS[kind]
+    original = bph.build_outputs
+
+    def tampered(rows, build_date):
+        shards, index, upcoming, stats = original(rows, build_date)
+        tamper(shards, index)
+        return shards, index, upcoming, stats
+
+    monkeypatch.setattr(bph, "build_outputs", tampered)
+    with pytest.raises(BuildError) as e:
+        build(tmp_path, checked_at="2026-09-18T02:00:00+08:00", allow_anomaly=allow_anomaly)
+    # 錨在這條守門自己的訊息上：別的 guard 先失敗也會 raise，那樣不算通過
+    assert [m for m in e.value.args[0] if "shard 路由不一致" in m and label in m], e.value.args[0]
+    assert tree_hash(tmp_path) == before
+
+
+def test_s14_untampered_build_has_no_routing_errors(tmp_path):
+    rows = nhi.parse_csv(SNAPSHOT.read_bytes())
+    shards, index, _, _ = bph.build_outputs(rows, D)
+    assert bph.routing_errors(shards, index) == []
+    versions = bph.shard_versions(shards)
+    files = bph.render(shards, index, versions, bph.data_version(versions))
+    shard_map = {"prefixLength": bph.PREFIX_LENGTH, "files": sorted(shards), "versions": versions}
+    assert bph.output_routing_errors(files, shard_map) == []
+
+
+# 序列化層的缺陷：建置中間的 dict 完全正確，只有待發布的 bytes 是錯的（codex C1）。
+# 守門若只看模型，這四種都會放行。
+def _render_drop_code(files):
+    path = sorted(k for k in files if k.startswith("history/"))[0]
+    obj = json.loads(files[path])
+    obj["drugs"].pop(sorted(obj["drugs"])[0])
+    files[path] = bph.dumps(obj)
+
+
+def _render_wrong_file(files):
+    src, dst = sorted(k for k in files if k.startswith("history/"))[:2]
+    a, b = json.loads(files[src]), json.loads(files[dst])
+    code = sorted(a["drugs"])[0]
+    b["drugs"][code] = a["drugs"].pop(code)
+    files[src], files[dst] = bph.dumps(a), bph.dumps(b)
+
+
+def _render_rename_file(files):
+    path = sorted(k for k in files if k.startswith("history/"))[0]
+    files[path.replace("history/", "history/X")] = files.pop(path)
+
+
+def _render_stale_version(files):
+    path = sorted(k for k in files if k.startswith("history/"))[0]
+    obj = json.loads(files[path])
+    obj["shardVersion"] = "sha256:not-in-map"
+    files[path] = bph.dumps(obj)
+
+
+RENDER_TAMPERS = {
+    "drop_code": (_render_drop_code, "index 有而任何 shard 都沒有"),
+    "wrong_file": (_render_wrong_file, "代號不在最長前綴所選的片"),
+    "rename_file": (_render_rename_file, "shard map 與實際 history 檔不對應"),
+    "stale_version": (_render_stale_version, "shardVersion 與 shard map 記載不符"),
+}
+
+
+@pytest.mark.parametrize("allow_anomaly", [False, True])
+@pytest.mark.parametrize("kind", sorted(RENDER_TAMPERS))
+def test_s14_routing_guard_checks_rendered_bytes(tmp_path, monkeypatch, kind, allow_anomaly):
+    build(tmp_path)
+    before = tree_hash(tmp_path)
+    tamper, label = RENDER_TAMPERS[kind]
+    original = bph.render
+
+    def tampered(*args):
+        files = original(*args)
+        tamper(files)
+        return files
+
+    monkeypatch.setattr(bph, "render", tampered)
+    with pytest.raises(BuildError) as e:
+        build(tmp_path, checked_at="2026-09-18T02:00:00+08:00", allow_anomaly=allow_anomaly)
+    assert [m for m in e.value.args[0] if "shard 路由不一致" in m and label in m], e.value.args[0]
+    assert tree_hash(tmp_path) == before
+
+
+def test_s14_meta_shard_map_is_the_one_the_guard_checked(tmp_path):
+    """寫進 meta.json 的 shard map 必須與實際 history 檔一一對應、版本相符（守門與 meta 用同一份）。"""
+    build(tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    on_disk = sorted(p.stem for p in (tmp_path / "history").glob("*.json"))
+    assert meta["shards"]["files"] == on_disk
+    for p in on_disk:
+        shard = json.loads((tmp_path / "history" / f"{p}.json").read_text(encoding="utf-8"))
+        assert shard["shardVersion"] == meta["shards"]["versions"][p]
+
+
+@pytest.mark.parametrize("case", ROUTING["cases"], ids=lambda c: c["code"])
+def test_s14_longest_prefix_matches_independent_expectation(case):
+    assert bph.longest_prefix(case["code"], ROUTING["files"]) == case["expect"]
+    # 順序不得影響結果：取第一個匹配前綴的實作在反序時會答錯
+    assert bph.longest_prefix(case["code"], ROUTING["files"][::-1]) == case["expect"]
+
+
+@pytest.mark.parametrize("placed,fails", [
+    ({"AC4": ["AC48000100"], "AC49": ["AC49000100"], "B0": [], "B0123": []}, False),
+    ({"AC4": ["AC48000100", "AC49000100"], "AC49": [], "B0": [], "B0123": []}, True),   # 該去 AC49
+    ({"AC4": [], "AC49": ["AC49000100"], "B0": ["B012345678"], "B0123": []}, True),     # 該去 B0123
+    ({"AC4": [], "AC49": [], "B0": ["B012999999"], "B0123": ["B012345678"]}, False),
+])
+def test_s14_routing_guard_honours_nested_prefixes(placed, fails):
+    shards = {p: {c: {} for c in codes} for p, codes in placed.items()}
+    index = [{"code": c} for codes in placed.values() for c in codes]
+    errors = bph.routing_errors(shards, index)
+    assert bool(errors) == fails
+    if fails:
+        assert all("代號不在最長前綴所選的片" in m for m in errors)

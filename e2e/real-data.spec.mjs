@@ -32,6 +32,68 @@ test('正式資料：搜尋卡不得出現「— 元」；首列 0 元代號不�
   await expect(firstRow).not.toContainText('終止');
 });
 
+// spec-startup S15：真實 data/、GitHub Pages 的專案子路徑、deep link。index 扣住期間詳情就必須正確，
+// 預期值由該片 shard 的 records 獨立算出（不經 engine.js、不綁特定價格）。
+test('正式資料：?code= 在 index 扣住時顯示詳情，內容等於由 shard 獨立算出的預期值；放行後可搜尋', async ({ page, request }) => {
+  const BASE = '/NHI-drug-price-history';
+  const CODE = 'A020296321';
+  const meta = await (await request.get(`${BASE}/data/meta.json`)).json();
+  const prefix = meta.shards.files.filter((f) => CODE.startsWith(f)).sort((a, b) => b.length - a.length)[0];
+  expect(prefix, '分片清單須有此代號的前綴').toBeTruthy();
+  const shard = await (await request.get(`${BASE}/data/history/${encodeURIComponent(prefix)}.json`)).json();
+  const entry = shard.drugs[CODE];
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+  const effective = entry.records.filter((r) => r.from <= today && (r.to === null || r.to >= today));
+
+  let release;
+  const gate = new Promise((ok) => { release = ok; });
+  let indexRequests = 0;
+  await page.route('**/data/drug_index.json', async (route) => {
+    indexRequests += 1;
+    await gate;
+    await route.continue();
+  });
+
+  await page.goto(`${BASE}/?code=${CODE}`);
+  const detail = page.locator('#detail');
+  await expect(detail.locator('.detail-head .code')).toHaveText(CODE, { timeout: 30_000 });
+  await expect(detail.locator('table.history tbody tr')).toHaveCount(entry.records.length + entry.invalidRecords.length);
+  // 現行價欄的預期分類由 shard 的 records 獨立推導（不經 engine.js；spec.md §5.3、§5.5 的文案）。
+  // 非有價分支只驗「沒有單位」會讓任意錯誤文字通過（codex T2）：逐分類斷言其固定文案。
+  const key = detail.locator('.metric.key .val');
+  const distinct = new Set(effective.map((r) => `${r.priceState}|${r.price}`));
+  const conflict = distinct.size > 1 || effective.some((r) => (r.flags || []).includes('conflicting_price_interval'));
+  const cur = effective[0];
+  const pricedBeforeCur = cur ? entry.records.slice(0, entry.records.indexOf(cur)).some((r) => r.priceState === 'priced') : false;
+  if (conflict) await expect(key).toContainText('來源紀錄衝突，無法判定單一支付價');
+  else if (!cur && today < entry.records[0].from) await expect(key).toContainText('尚未生效');
+  else if (!cur && entry.records.some((r) => r.from > today)) await expect(key).toContainText('此日期無支付紀錄（空窗）');
+  else if (!cur) await expect(key).toContainText('目前無有效支付紀錄');
+  else if (cur.priceState === 'priced') await expect(key).toContainText(`${cur.rawPrice} 元`);
+  else if (cur.priceState === 'terminated') {
+    await expect(key).toContainText(pricedBeforeCur ? '已終止支付（' : '健保支付價 0 元（此前無有價紀錄）');
+  } else if (cur.priceState === 'suspended') await expect(key).toContainText(`暫停支付（來源標示 ${cur.rawPrice}）`);
+  else throw new Error(`smoke 代號 ${CODE} 的現行狀態 ${cur.priceState} 沒有對應的預期文案：請補上分類`);
+  if (!cur || cur.priceState !== 'priced' || conflict) await expect(key.locator('small')).toHaveCount(0);   // 非有價：不得顯示金額
+  await expect.poll(() => indexRequests).toBe(1);
+  await expect(page.locator('#q')).toBeDisabled();                               // index 仍扣住
+
+  release();
+  await page.locator('#backLink').click();
+  const input = page.locator('#q');
+  await expect(input).toBeEnabled({ timeout: 60_000 });
+  await input.fill(CODE);
+  await expect(page.locator('#results .result').first()).toHaveAttribute('data-code', CODE);
+});
+
+// spec-startup S8：實際發布的 meta.json 須通過 §5.7 的 shard map 合法性
+test('正式資料：meta.json 的 shard map 通過 validateMeta', async ({ request }) => {
+  const { validateMeta } = await import('../engine.js');
+  const meta = await (await request.get('/data/meta.json')).json();
+  expect(validateMeta(meta)).toEqual({ ok: true });
+  expect(meta.shards.files.length).toBeGreaterThan(0);
+});
+
 test('正式資料：index 每筆 window 的非有價列都帶 pricedBefore', async ({ request }) => {
   const res = await request.get('/data/drug_index.json');
   expect(res.ok()).toBe(true);

@@ -187,7 +187,6 @@ test('M6 全部失敗 → 錯誤狀態與重試，六個輸出面都不得呈現
 // ── M7：混批（版本不一致）任何輸出都不得呈現 ────────────────────
 for (const [name, mutate] of [
   ['shardVersion 不符', (data) => { data.shards.A035.shardVersion = 'sha256:stale'; }],
-  ['meta 缺該片版本', (data) => { delete data.meta.shards.versions.A035; }],
 ]) {
   test(`M7 冷開時混批（${name}）→ 整頁不組合`, async ({ page }) => {
     const data = buildData();
@@ -201,6 +200,21 @@ for (const [name, mutate] of [
     await expect(page.locator('#cmpCsv')).toHaveCount(0);
   });
 }
+
+// spec-startup §5.7：meta 的 shard map 缺某片版本已不算混批，而是 meta 本身不合法——整站錯誤＋重試，同樣不得呈現任何輸出
+test('M7 meta 缺該片版本 → meta 不合法，整頁不組合', async ({ page }) => {
+  const data = buildData();
+  delete data.meta.shards.versions.A035;
+  await mockSite(page, { today: '2026-09-11', data });
+  await page.goto('/?codes=A035680329,AC48867100');
+  const region = page.getByRole('region', { name: '多代號比較' });
+  await expect(region).toContainText('meta.json 內容不合法');
+  await expect(region.getByRole('button', { name: '重試' })).toBeVisible();
+  await expect(summary(page)).toHaveCount(0);
+  await expect(eventRows(page)).toHaveCount(0);
+  await expect(page.locator('.cmp-line')).toHaveCount(0);
+  await expect(page.locator('#cmpCsv')).toHaveCount(0);
+});
 
 test('M7 已有結果後才混批 → 既有摘要與 CSV 一併停止呈現', async ({ page }) => {
   const good = buildData();

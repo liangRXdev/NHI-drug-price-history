@@ -1,0 +1,742 @@
+{
+  "measuredAt": "2026-11-17T00:42:46.324Z",
+  "conditions": {
+    "cpuThrottle": 4,
+    "network": {
+      "latencyMs": 60,
+      "downloadMbps": 9,
+      "uploadMbps": 1.5
+    },
+    "gzip": "level 6",
+    "cache": "cold",
+    "serviceWorkers": "block",
+    "fonts": "aborted",
+    "browser": "158.0.8127.18"
+  },
+  "dirs": {
+    "A": "legacy",
+    "B": "NHI-drug-price-history"
+  },
+  "dataVersion": "sha256:a81eb238afe9cc84b9ba71436785f1627840b36ccecb8a5e5d8cea63a77b244f",
+  "codes": {
+    "AC49155265": {
+      "prefix": "AC49",
+      "rows": 16,
+      "newest": "2024-10-01",
+      "oldest": "2009-12-01"
+    },
+    "B004922277": {
+      "prefix": "B004",
+      "rows": 9,
+      "newest": "2015-02-01",
+      "oldest": "1995-03-01"
+    },
+    "NB01043100": {
+      "prefix": "NB01",
+      "rows": 1,
+      "newest": "2012-03-01",
+      "oldest": "2012-03-01"
+    }
+  },
+  "query": "AC49155265",
+  "blocks": [
+    {
+      "index": 0,
+      "order": "ABBAAB",
+      "detail": {
+        "AC49155265": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5529.5,
+                "searchReady": 4845.1
+              },
+              {
+                "detail": 5239.7,
+                "searchReady": 4784.4
+              },
+              {
+                "detail": 4832.3,
+                "searchReady": 4366.3
+              }
+            ],
+            "B": [
+              {
+                "detail": 1646.2,
+                "searchReady": 5574.8
+              },
+              {
+                "detail": 1324.2,
+                "searchReady": 4985.1
+              },
+              {
+                "detail": 1339.2,
+                "searchReady": 4980.1
+              }
+            ]
+          },
+          "detailImprovement": 3900.5,
+          "searchReadyDegradation": 200.7
+        },
+        "B004922277": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4725.5,
+                "searchReady": 4392.3
+              },
+              {
+                "detail": 4765.3,
+                "searchReady": 4398
+              },
+              {
+                "detail": 4605.4,
+                "searchReady": 4307.8
+              }
+            ],
+            "B": [
+              {
+                "detail": 1140.9,
+                "searchReady": 4693.8
+              },
+              {
+                "detail": 1223.9,
+                "searchReady": 4890
+              },
+              {
+                "detail": 1350.5,
+                "searchReady": 5056.9
+              }
+            ]
+          },
+          "detailImprovement": 3501.6,
+          "searchReadyDegradation": 497.7
+        },
+        "NB01043100": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4666.5,
+                "searchReady": 4359.6
+              },
+              {
+                "detail": 4605,
+                "searchReady": 4307.8
+              },
+              {
+                "detail": 4587.3,
+                "searchReady": 4288.6
+              }
+            ],
+            "B": [
+              {
+                "detail": 1148,
+                "searchReady": 4678.6
+              },
+              {
+                "detail": 1129.6,
+                "searchReady": 4857.4
+              },
+              {
+                "detail": 1101,
+                "searchReady": 4688.6
+              }
+            ]
+          },
+          "detailImprovement": 3475.4,
+          "searchReadyDegradation": 380.8
+        }
+      },
+      "home": {
+        "raw": {
+          "A": [
+            4370.2,
+            4521.6,
+            4435.2
+          ],
+          "B": [
+            4275.7,
+            4599.2,
+            4326.7
+          ]
+        },
+        "degradation": -108.5
+      },
+      "voided": []
+    },
+    {
+      "index": 1,
+      "order": "BAABBA",
+      "detail": {
+        "AC49155265": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4881.8,
+                "searchReady": 4413.3
+              },
+              {
+                "detail": 4866.3,
+                "searchReady": 4353
+              },
+              {
+                "detail": 4745.4,
+                "searchReady": 4267.4
+              }
+            ],
+            "B": [
+              {
+                "detail": 1388.6,
+                "searchReady": 4999.5
+              },
+              {
+                "detail": 1304.5,
+                "searchReady": 4864.3
+              },
+              {
+                "detail": 1388.5,
+                "searchReady": 4966.6
+              }
+            ]
+          },
+          "detailImprovement": 3477.8,
+          "searchReadyDegradation": 613.6
+        },
+        "B004922277": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4787.7,
+                "searchReady": 4439.7
+              },
+              {
+                "detail": 4780.7,
+                "searchReady": 4418.2
+              },
+              {
+                "detail": 4696.4,
+                "searchReady": 4356.2
+              }
+            ],
+            "B": [
+              {
+                "detail": 1227.5,
+                "searchReady": 4716.1
+              },
+              {
+                "detail": 1158.9,
+                "searchReady": 4762.6
+              },
+              {
+                "detail": 1145.3,
+                "searchReady": 4999.2
+              }
+            ]
+          },
+          "detailImprovement": 3621.8,
+          "searchReadyDegradation": 344.4
+        },
+        "NB01043100": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4608.1,
+                "searchReady": 4312.3
+              },
+              {
+                "detail": 4611.7,
+                "searchReady": 4302.9
+              },
+              {
+                "detail": 4686.5,
+                "searchReady": 4363.8
+              }
+            ],
+            "B": [
+              {
+                "detail": 1130.9,
+                "searchReady": 4708.1
+              },
+              {
+                "detail": 1156.8,
+                "searchReady": 4673.4
+              },
+              {
+                "detail": 1144.9,
+                "searchReady": 4684.6
+              }
+            ]
+          },
+          "detailImprovement": 3466.8,
+          "searchReadyDegradation": 372.3
+        }
+      },
+      "home": {
+        "raw": {
+          "A": [
+            4321.4,
+            4445.8,
+            4396.1
+          ],
+          "B": [
+            4240.8,
+            4332.2,
+            4346.1
+          ]
+        },
+        "degradation": -63.9
+      },
+      "voided": []
+    },
+    {
+      "index": 2,
+      "order": "ABBAAB",
+      "detail": {
+        "AC49155265": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4965.9,
+                "searchReady": 4393.6
+              },
+              {
+                "detail": 5028.2,
+                "searchReady": 4528.5
+              },
+              {
+                "detail": 5149.3,
+                "searchReady": 4643.4
+              }
+            ],
+            "B": [
+              {
+                "detail": 1485.6,
+                "searchReady": 5145.5
+              },
+              {
+                "detail": 1481.5,
+                "searchReady": 5129.6
+              },
+              {
+                "detail": 1481.8,
+                "searchReady": 5200.2
+              }
+            ]
+          },
+          "detailImprovement": 3546.4,
+          "searchReadyDegradation": 617
+        },
+        "B004922277": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5068.8,
+                "searchReady": 4700.1
+              },
+              {
+                "detail": 4956.1,
+                "searchReady": 4552
+              },
+              {
+                "detail": 4870.3,
+                "searchReady": 4517.3
+              }
+            ],
+            "B": [
+              {
+                "detail": 1307,
+                "searchReady": 4977.6
+              },
+              {
+                "detail": 1314.3,
+                "searchReady": 4966
+              },
+              {
+                "detail": 1354,
+                "searchReady": 5102.1
+              }
+            ]
+          },
+          "detailImprovement": 3641.8,
+          "searchReadyDegradation": 425.6
+        },
+        "NB01043100": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4960.7,
+                "searchReady": 4585.4
+              },
+              {
+                "detail": 4974.5,
+                "searchReady": 4619.4
+              },
+              {
+                "detail": 5231.4,
+                "searchReady": 4757.4
+              }
+            ],
+            "B": [
+              {
+                "detail": 1311,
+                "searchReady": 5117.2
+              },
+              {
+                "detail": 1271.3,
+                "searchReady": 4991
+              },
+              {
+                "detail": 1675,
+                "searchReady": 5516.7
+              }
+            ]
+          },
+          "detailImprovement": 3663.5,
+          "searchReadyDegradation": 497.8
+        }
+      },
+      "home": {
+        "raw": {
+          "A": [
+            4863.7,
+            4922.6,
+            4850.8
+          ],
+          "B": [
+            4690.1,
+            4938.2,
+            4979.1
+          ]
+        },
+        "degradation": 74.5
+      },
+      "voided": []
+    },
+    {
+      "index": 3,
+      "order": "BAABBA",
+      "detail": {
+        "AC49155265": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5536.1,
+                "searchReady": 4849.8
+              },
+              {
+                "detail": 5616.2,
+                "searchReady": 4916.9
+              },
+              {
+                "detail": 5340.7,
+                "searchReady": 4762.1
+              }
+            ],
+            "B": [
+              {
+                "detail": 1619.3,
+                "searchReady": 5433.4
+              },
+              {
+                "detail": 1526.3,
+                "searchReady": 5353.4
+              },
+              {
+                "detail": 1558.4,
+                "searchReady": 5421.6
+              }
+            ]
+          },
+          "detailImprovement": 3977.7,
+          "searchReadyDegradation": 571.8
+        },
+        "B004922277": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5094.1,
+                "searchReady": 4588.4
+              },
+              {
+                "detail": 5275.6,
+                "searchReady": 4785.1
+              },
+              {
+                "detail": 5159.2,
+                "searchReady": 4703.8
+              }
+            ],
+            "B": [
+              {
+                "detail": 1467.1,
+                "searchReady": 5300.9
+              },
+              {
+                "detail": 1393.6,
+                "searchReady": 5212
+              },
+              {
+                "detail": 1507.2,
+                "searchReady": 5380.9
+              }
+            ]
+          },
+          "detailImprovement": 3692.1,
+          "searchReadyDegradation": 597.1
+        },
+        "NB01043100": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5303.2,
+                "searchReady": 4874.1
+              },
+              {
+                "detail": 5258.6,
+                "searchReady": 4865.6
+              },
+              {
+                "detail": 5432.1,
+                "searchReady": 4983.9
+              }
+            ],
+            "B": [
+              {
+                "detail": 1434.1,
+                "searchReady": 5287.6
+              },
+              {
+                "detail": 1378.9,
+                "searchReady": 5162.8
+              },
+              {
+                "detail": 1464.5,
+                "searchReady": 5238.9
+              }
+            ]
+          },
+          "detailImprovement": 3869.1,
+          "searchReadyDegradation": 364.8
+        }
+      },
+      "home": {
+        "raw": {
+          "A": [
+            5059.2,
+            5320.2,
+            5053.3
+          ],
+          "B": [
+            5122.7,
+            4769.6,
+            4749.8
+          ]
+        },
+        "degradation": -289.6
+      },
+      "voided": []
+    },
+    {
+      "index": 4,
+      "order": "ABBAAB",
+      "detail": {
+        "AC49155265": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5241.9,
+                "searchReady": 4702.5
+              },
+              {
+                "detail": 5168,
+                "searchReady": 4627.5
+              },
+              {
+                "detail": 5178.8,
+                "searchReady": 4625.3
+              }
+            ],
+            "B": [
+              {
+                "detail": 1514.9,
+                "searchReady": 5149.2
+              },
+              {
+                "detail": 1458.4,
+                "searchReady": 5189.5
+              },
+              {
+                "detail": 1442,
+                "searchReady": 5142.2
+              }
+            ]
+          },
+          "detailImprovement": 3720.4,
+          "searchReadyDegradation": 521.7
+        },
+        "B004922277": {
+          "raw": {
+            "A": [
+              {
+                "detail": 4832.5,
+                "searchReady": 4489.7
+              },
+              {
+                "detail": 4889.7,
+                "searchReady": 4514.3
+              },
+              {
+                "detail": 4996.6,
+                "searchReady": 4611.1
+              }
+            ],
+            "B": [
+              {
+                "detail": 1370.8,
+                "searchReady": 5129.2
+              },
+              {
+                "detail": 1324.7,
+                "searchReady": 5003.8
+              },
+              {
+                "detail": 1304.6,
+                "searchReady": 4937.7
+              }
+            ]
+          },
+          "detailImprovement": 3565,
+          "searchReadyDegradation": 489.5
+        },
+        "NB01043100": {
+          "raw": {
+            "A": [
+              {
+                "detail": 5062.3,
+                "searchReady": 4678.5
+              },
+              {
+                "detail": 4964.7,
+                "searchReady": 4589.5
+              },
+              {
+                "detail": 5016.5,
+                "searchReady": 4657
+              }
+            ],
+            "B": [
+              {
+                "detail": 1261.6,
+                "searchReady": 4936
+              },
+              {
+                "detail": 1396.4,
+                "searchReady": 5159
+              },
+              {
+                "detail": 1311.6,
+                "searchReady": 4996.1
+              }
+            ]
+          },
+          "detailImprovement": 3704.9,
+          "searchReadyDegradation": 339.1
+        }
+      },
+      "home": {
+        "raw": {
+          "A": [
+            4578,
+            4598.5,
+            4712.1
+          ],
+          "B": [
+            4698.2,
+            4632.4,
+            4612.4
+          ]
+        },
+        "degradation": 33.9
+      },
+      "voided": []
+    }
+  ],
+  "voided": [],
+  "summary": {
+    "perCode": {
+      "AC49155265": {
+        "detailImprovement": [
+          3900.5,
+          3477.8,
+          3546.4,
+          3977.7,
+          3720.4
+        ],
+        "min": 3477.8,
+        "median": 3720.4,
+        "maxAbs": 3977.7,
+        "searchReadyDegradation": [
+          200.7,
+          613.6,
+          617,
+          571.8,
+          521.7
+        ],
+        "searchReadyDegradationMedian": 571.8
+      },
+      "B004922277": {
+        "detailImprovement": [
+          3501.6,
+          3621.8,
+          3641.8,
+          3692.1,
+          3565
+        ],
+        "min": 3501.6,
+        "median": 3621.8,
+        "maxAbs": 3692.1,
+        "searchReadyDegradation": [
+          497.7,
+          344.4,
+          425.6,
+          597.1,
+          489.5
+        ],
+        "searchReadyDegradationMedian": 489.5
+      },
+      "NB01043100": {
+        "detailImprovement": [
+          3475.4,
+          3466.8,
+          3663.5,
+          3869.1,
+          3704.9
+        ],
+        "min": 3466.8,
+        "median": 3663.5,
+        "maxAbs": 3869.1,
+        "searchReadyDegradation": [
+          380.8,
+          372.3,
+          497.8,
+          364.8,
+          339.1
+        ],
+        "searchReadyDegradationMedian": 372.3
+      }
+    },
+    "home": {
+      "degradation": [
+        -108.5,
+        -63.9,
+        74.5,
+        -289.6,
+        33.9
+      ],
+      "median": -63.9,
+      "maxAbs": 289.6
+    },
+    "V": 3977.7,
+    "V_home": 289.6
+  }
+}
